@@ -25,6 +25,11 @@ workshop을 notebook에서 진행하려면 이 방식을 사용하세요. 저장
 3. notebook의 setup cell을 따라 package와 API key를 설정합니다. Colab에서는 key를 notebook cell에 직접 쓰지 말고 Secrets manager에 저장하세요.
 4. 안내가 나오면 출력된 viewer URL을 Google Chrome에서 엽니다.
 
+필수 Colab secret 이름:
+
+- `MENLO_API_KEY`: `platform.menlo.ai` -> Settings -> API Keys에서 발급받은 Menlo API key
+- `TOKAMAK_API_KEY`: Workshop 4와 모든 project starter agent에 필요
+
 ### Option 2: Local IDE Scaffold
 
 VS Code, PyCharm 등 로컬 IDE에서 작업하려면 이 저장소를 clone하고 `menlo_runner/` 아래의 reusable module을 사용하세요.
@@ -44,6 +49,7 @@ MENLO_API_KEY=...
 TOKAMAK_API_KEY=...
 ```
 
+`MENLO_API_KEY`는 `platform.menlo.ai` -> Settings -> API Keys에서 발급받습니다.
 `TOKAMAK_API_KEY`는 Workshop 4와 모든 project starter agent에 필요합니다. 프로젝트는 LLM-assisted decision loop를 필수로 요구합니다.
 
 ## Workshop Demo 실행
@@ -101,6 +107,13 @@ quit                     연결 해제, robot 삭제, 종료
 Exercise solution은 의도적으로 포함하지 않았습니다. Student notebook의 exercise cell은 직접 완성하세요. IDE에서 작업할 때는 같은 기능을 `student_program.py`에 작성할 수 있습니다.
 
 최종 프로젝트는 `notebooks/project/`의 level별 starter notebook을 사용하세요.
+
+프로젝트 안내 자료:
+
+- 영어: `docs/project_instructions.md`
+- 한국어: `docs/project_instructions.ko.md`
+- 발표 자료: `docs/project_instruction_kor_updated.pptx`
+- 원본 발표 자료: `docs/project_instruction_kor.pptx`
 
 영어 Python starter:
 

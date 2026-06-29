@@ -28,6 +28,11 @@ not need to clone the repository, install Python locally, or set up the IDE scaf
    notebook cell.
 4. Open the printed viewer URL in Google Chrome when instructed.
 
+Required Colab secret names:
+
+- `MENLO_API_KEY`: your Menlo API key from `platform.menlo.ai` -> Settings -> API Keys
+- `TOKAMAK_API_KEY`: required for Workshop 4 and all project starter agents
+
 ### Option 2: Local IDE Scaffold
 
 Use this option if you prefer VS Code, PyCharm, or another local IDE. Clone this
@@ -48,6 +53,7 @@ MENLO_API_KEY=...
 TOKAMAK_API_KEY=...
 ```
 
+`MENLO_API_KEY` comes from `platform.menlo.ai` -> Settings -> API Keys.
 `TOKAMAK_API_KEY` is required for Workshop 4 and for all project starter agents because the project requires an LLM-assisted decision loop.
 
 ## Run Workshop Demos
@@ -106,6 +112,13 @@ Exercise solutions are intentionally not included. Complete the exercise cells i
 student notebooks, or write the equivalent code in `student_program.py` when working in an IDE.
 
 For the final project, use the level-specific starters in `notebooks/project/`.
+
+Project instructions:
+
+- English: `docs/project_instructions.md`
+- Korean: `docs/project_instructions.ko.md`
+- Presentation deck: `docs/project_instruction_kor_updated.pptx`
+- Original presentation deck: `docs/project_instruction_kor.pptx`
 
 English Python starters:
 
