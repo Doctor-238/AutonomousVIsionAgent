@@ -12,11 +12,16 @@ from menlo_runner.programs.project.ko.level_2_starter_ko import (
     AgentMemory,
     AgentDecision,
     Observation,
+    AgentDecision,
+    AgentMemory,
+    Observation,
     ScannedDetection,
+    _head_pitch_for_target,
     _navigation_arrived,
     _navigation_velocity_command,
     _pad_candidates,
     _select_target_detection,
+    _should_peek_down,
     choose_fast_decision,
     get_robot_status,
     move_velocity,
@@ -72,18 +77,19 @@ def observation(*detections):
 class Level2ScenarioTest(unittest.TestCase):
     def test_task_parsing_standard(self):
         task = "Find and sort the six cubes in the warehouse into their matching destination pads."
-        limit, priorities = asyncio.run(parse_task_instructions(task, ""))
+        limit, priorities, skipped = asyncio.run(parse_task_instructions(task, ""))
         self.assertIsNone(limit)
         self.assertEqual(priorities, [])
+        self.assertEqual(skipped, [])
 
     def test_task_parsing_limit(self):
-        task = "6개 중 4개만 목적지 패드로 분류하세요."
-        limit, priorities = asyncio.run(parse_task_instructions(task, ""))
+        task = "6개 중 4개만 목적지 패드에 분류하세요."
+        limit, priorities, skipped = asyncio.run(parse_task_instructions(task, ""))
         self.assertEqual(limit, 4)
 
     def test_task_parsing_priority(self):
         task = "노란색과 파란색 큐브를 가장 먼저 처리하고, 나머지를 분류하세요."
-        limit, priorities = asyncio.run(parse_task_instructions(task, ""))
+        limit, priorities, skipped = asyncio.run(parse_task_instructions(task, ""))
         # Check that yellow and blue are extracted in priorities
         priority_lower = [p.lower() for p in priorities]
         self.assertIn("yellow", priority_lower)
@@ -560,6 +566,122 @@ class Level2ScenarioTest(unittest.TestCase):
         self.assertLess(wz, 0.0)
         self.assertLess(duration, 0.8)
 
+    def test_head_pitch_policy_looks_slightly_down_by_default(self):
+        cube_pitch = _head_pitch_for_target("cube")
+        pad_pitch = _head_pitch_for_target("pad", has_held=True)
+        close_cube_pitch = _head_pitch_for_target("cube", close=True)
+        held_pitch = _head_pitch_for_target("cube", held_color_check=True)
+
+        self.assertGreater(cube_pitch, pad_pitch)
+        self.assertGreater(close_cube_pitch, cube_pitch)
+        self.assertGreater(held_pitch, pad_pitch)
+
+    def test_close_target_triggers_temporary_lookdown_only_when_centered(self):
+        self.assertTrue(
+            _should_peek_down("cube", area=3505, angle_deg=-1.5, step=1)
+        )
+        self.assertFalse(
+            _should_peek_down("cube", area=3505, angle_deg=18.0, step=1)
+        )
+        self.assertTrue(
+            _should_peek_down("pad", area=7600, angle_deg=4.0, step=3)
+        )
+        self.assertFalse(
+            _should_peek_down("pad", area=7600, angle_deg=4.0, step=1)
+        )
+
+    def test_cube_arrival_requires_centered_target(self):
+        arrived = _navigation_arrived(
+            target_kind="cube",
+            area=21250,
+            angle_deg=-12.5,
+            moved_toward_target=True,
+            pad_direction_confirmed=False,
+            pad_forward_steps=0,
+            step=4,
+        )
+        self.assertFalse(arrived)
+
+    def test_cube_arrival_allows_precontact_pick_before_pushing(self):
+        arrived = _navigation_arrived(
+            target_kind="cube",
+            area=4100,
+            angle_deg=-1.5,
+            moved_toward_target=True,
+            pad_direction_confirmed=False,
+            pad_forward_steps=0,
+            step=1,
+        )
+        self.assertTrue(arrived)
+
+    def test_cube_arrival_rejects_small_precontact_blob(self):
+        arrived = _navigation_arrived(
+            target_kind="cube",
+            area=2500,
+            angle_deg=-1.5,
+            moved_toward_target=True,
+            pad_direction_confirmed=False,
+            pad_forward_steps=0,
+            step=1,
+        )
+        self.assertFalse(arrived)
+
+    def test_cube_arrival_allows_large_close_look_before_pushing(self):
+        arrived = _navigation_arrived(
+            target_kind="cube",
+            area=11278,
+            angle_deg=-1.8,
+            moved_toward_target=False,
+            pad_direction_confirmed=False,
+            pad_forward_steps=0,
+            step=1,
+        )
+        self.assertTrue(arrived)
+
+    def test_cube_selector_rejects_live_source_zone_floor_blob(self):
+        memory = AgentMemory()
+        source_zone_blob = detection(
+            "green",
+            area=7336,
+            angle=-1.8,
+            centroid=(602, 693),
+            bbox=(528, 665, 149, 55),
+        )
+        close_source_zone_blob = detection(
+            "green",
+            area=11274,
+            angle=-1.8,
+            centroid=(597, 679),
+            bbox=(518, 638, 158, 82),
+        )
+        real_cube = detection(
+            "green",
+            area=3597,
+            angle=-2.0,
+            centroid=(598, 304),
+            bbox=(567, 272, 63, 63),
+        )
+
+        self.assertIsNone(_select_target_detection([source_zone_blob], "green", "cube", memory))
+        self.assertIsNone(_select_target_detection([close_source_zone_blob], "green", "cube", memory))
+        selected = _select_target_detection(
+            [source_zone_blob, close_source_zone_blob, real_cube],
+            "green",
+            "cube",
+            memory,
+        )
+        self.assertEqual(selected, real_cube)
+
+    def test_cube_selector_rejects_live_wide_flat_destination_decoy(self):
+        memory = AgentMemory()
+        decoy = detection(
+            "green",
+            area=4000,
+            angle=-1.8,
+            centroid=(598, 600),
+            bbox=(500, 580, 150, 40), # wide flat aspect
+        )
+        self.assertIsNone(_select_target_detection([decoy], "green", "cube", memory))
 
 if __name__ == "__main__":
     unittest.main()

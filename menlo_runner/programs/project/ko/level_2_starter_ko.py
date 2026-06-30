@@ -46,14 +46,19 @@ CUBE_PRECONTACT_PICK_AREA = 3200
 CUBE_APPROACH_PICK_AREA = 5000
 # 큐브 자체는 대개 5000~25000 px, 그 이상은 벽/바닥 패치 가능성 높음
 MAX_CUBE_BLOB_AREA = 30000
-# 패드 표지판은 대개 3000~15000 px, 그 이상은 벽/장애물 가능성 높음
-MAX_PAD_TRACK_BLOB_AREA = 15000
+# 패드 인식은 근접 시 영역이 매우 커질 수 있으므로 한도 상향 (self-occlusion 필터가 따로 처리)
+MAX_PAD_TRACK_BLOB_AREA = 35000
 CUBE_CENTERED_DEG = 10.0
 PAD_CENTERED_DEG = 10.0
 CUBE_IMMEDIATE_PICK_AREA = PICK_BLOB_AREA * 2.5
 CUBE_STAGNANT_AREA_DELTA = 250
 CUBE_STAGNANT_STEP_LIMIT = 3
 HEAD_POSE_EPSILON = 0.01
+CUBE_NAV_PITCH = 0.18
+PAD_NAV_PITCH = 0.06
+CLOSE_CUBE_PITCH = 0.30
+CLOSE_PAD_PITCH = 0.16
+HELD_COLOR_PITCH = 0.22
 LLM_DECISION_TIMEOUT_S = 4
 LLM_DECISION_MAX_TOKENS = 160
 ROBOT_STATUS_TIMEOUT_S = 8.0
@@ -118,11 +123,13 @@ class AgentMemory:
     delivered_count: int = 0
     delivery_limit: int | None = None
     priority_colors: list[str] = field(default_factory=list)
+    skipped_colors: list[str] = field(default_factory=list)
     held_color: str | None = None
     active_color: str | None = None
     stage: str = "need_cube"
     cube_ready: bool = False
     pad_ready: bool = False
+    pad_verified: bool = False
     head_yaw: float | None = None
     head_pitch: float | None = None
     nav_track_kind: str | None = None
@@ -200,7 +207,7 @@ def normalize_color(value: Any) -> str | None:
     return lowered if lowered in COLOR_ORDER else None
 
 
-def parse_task_instructions_local(task: str) -> tuple[int | None, list[str]]:
+def parse_task_instructions_local(task: str) -> tuple[int | None, list[str], list[str]]:
     """Fast local parser for the workshop task. Uses the API only as fallback."""
     delivery_limit: int | None = None
 
@@ -223,11 +230,24 @@ def parse_task_instructions_local(task: str) -> tuple[int | None, list[str]]:
             positions.append((min(found), color))
 
     priority_colors: list[str] = []
-    for _, color in sorted(positions):
-        if color not in priority_colors:
-            priority_colors.append(color)
+    skipped_colors: list[str] = []
+    
+    # "제외"나 "빼고" 같은 단어가 있는지 확인
+    skip_keywords = ["제외", "빼고", "말고", "건너", "배제", "except", "skip", "exclude", "without"]
+    for pos, color in sorted(positions):
+        # 해당 색상 이름 주변에 스킵 키워드가 있는지 확인
+        # 간단히 뒤쪽 10자 이내에 키워드가 있으면 스킵으로 간주
+        context = lowered[pos:pos+15]
+        is_skipped = any(kw in context for kw in skip_keywords)
+        
+        if is_skipped:
+            if color not in skipped_colors:
+                skipped_colors.append(color)
+        else:
+            if color not in priority_colors:
+                priority_colors.append(color)
 
-    return delivery_limit, priority_colors
+    return delivery_limit, priority_colors, skipped_colors
 
 
 def _visible_detections(observation: Observation) -> list[Any]:
@@ -272,7 +292,7 @@ def _looks_like_held_cube_blob(detection: Any) -> bool:
         area >= 8000
         and cy >= 285
         and y >= 210
-        and 0.45 <= aspect <= 2.2
+        and 0.45 <= aspect <= 2.5
     )
     return small_center_hand_blob or large_low_hand_blob
 
@@ -405,7 +425,7 @@ def _looks_like_edge_scene_blob(detection: Any) -> bool:
 
 def _looks_like_wide_low_scene_patch(detection: Any) -> bool:
     _, y, width, height, _, cy, area, aspect = _bbox_metrics(detection)
-    return area >= 3000 and y >= 500 and cy >= 500 and width >= 140 and height <= 180 and aspect >= 3.0
+    return area >= 3000 and cy >= 500 and width >= 120 and aspect >= 1.8
 
 
 def _track_continuity_bonus(detection: Any, memory: AgentMemory, target_kind: str, target_color: str | None) -> float:
@@ -617,22 +637,21 @@ def _navigation_arrived(
         return False
 
     if target_kind == "cube":
-        # 큐브가 충분히 가까우면 도달로 판단 (pick 가능 거리)
-        if area >= arrival_area:
-            return moved_toward_target or area >= CUBE_IMMEDIATE_PICK_AREA
-        # 처음 몇 스텝에서 가까우면 도달
+        # 처음 스텝에서 충분히 크면 즉시 도달
         if step <= 2 and area >= CUBE_PRECONTACT_PICK_AREA:
             return True
-        # 전진하면서 접근 중이고 적절한 거리면 도달
-        return moved_toward_target and step >= 3 and area >= CUBE_APPROACH_PICK_AREA
-
-    if area < arrival_area:
+        # 큐브가 가까우면 이동 이력이 있거나 초접근 상태일 때 도달
+        if area >= arrival_area:
+            return moved_toward_target or area >= CUBE_IMMEDIATE_PICK_AREA
+        # 충분히 접근했고 이동 중이었다면 도달
+        if moved_toward_target and area >= CUBE_APPROACH_PICK_AREA:
+            return True
         return False
 
-    return moved_toward_target and (
-        pad_forward_steps >= 3
-        or (pad_direction_confirmed and pad_forward_steps >= 2)
-        or step >= 10
+    # Pad navigation: arrival is a heuristic based on size and exploration
+    return area >= arrival_area and (
+        pad_forward_steps >= 2
+        or step >= 8
     )
 
 
@@ -953,9 +972,73 @@ async def perceive(ctx: Any) -> list[Any]:
 
 
 async def estimate_held_color(ctx: Any, memory: AgentMemory) -> str | None:
-    await set_head_cached(ctx, memory, yaw=0.0, pitch=0.02)
+    await set_head_cached(ctx, memory, yaw=0.0, pitch=HELD_COLOR_PITCH)
     await asyncio.sleep(0.1)
     return estimate_held_color_from_detections(await perceive(ctx))
+
+
+def _head_pitch_for_target(
+    target_kind: str,
+    *,
+    has_held: bool = False,
+    close: bool = False,
+    held_color_check: bool = False,
+) -> float:
+    if held_color_check:
+        return HELD_COLOR_PITCH
+    if close:
+        return CLOSE_PAD_PITCH if target_kind == "pad" or has_held else CLOSE_CUBE_PITCH
+    return PAD_NAV_PITCH if target_kind == "pad" or has_held else CUBE_NAV_PITCH
+
+
+def _should_peek_down(target_kind: str, *, area: int, angle_deg: float, step: int) -> bool:
+    centered_limit = PAD_CENTERED_DEG if target_kind == "pad" else CUBE_CENTERED_DEG
+    if abs(angle_deg) > centered_limit:
+        return False
+    if target_kind == "cube":
+        return area >= CUBE_PRECONTACT_PICK_AREA
+    return step >= 2 and area >= PLACE_BLOB_AREA
+
+
+async def peek_down_for_close_target(
+    ctx: Any,
+    memory: AgentMemory,
+    target_color: str | None,
+    *,
+    target_kind: str,
+    base_pitch: float,
+) -> Any | None:
+    close_pitch = _head_pitch_for_target(
+        target_kind,
+        has_held=memory.held_color is not None,
+        close=True,
+    )
+    if close_pitch <= base_pitch + HEAD_POSE_EPSILON:
+        return None
+
+    print(f"[Head] close {target_kind} check: pitch {base_pitch:.2f} -> {close_pitch:.2f}")
+    result = await set_head_cached(ctx, memory, yaw=0.0, pitch=close_pitch)
+    if _sdk_call_failed(result):
+        return None
+
+    await asyncio.sleep(0.08)
+    detections = await perceive(ctx)
+    if target_kind == "pad":
+        scanned = [
+            ScannedDetection(
+                color=d.color,
+                angle_deg=d.angle_deg,
+                blob_area=d.blob_area,
+                centroid=d.centroid,
+                bbox=d.bbox,
+                head_yaw=0.0,
+                head_pitch=close_pitch,
+            )
+            for d in detections
+        ]
+        _remember_pad_bearings(memory, scanned)
+        detections = scanned
+    return detections
 
 
 async def set_head(ctx: Any, *, yaw: float | None = None, pitch: float | None = None) -> Any:
@@ -1208,7 +1291,7 @@ def parse_pad_hint(text: str) -> str | None:
     blob = match.group(0) if match else ""
     try:
         data = json.loads(blob)
-    except json.JSONDecodeError:
+    except json.DecodeError:
         lowered = text.lower()
         if "left" in lowered:
             return "left"
@@ -1265,19 +1348,20 @@ def should_consult_llm(
 
 
 # ---------------------------------------------------------------------------
-async def parse_task_instructions(task: str, api_key: str) -> tuple[int | None, list[str]]:
+async def parse_task_instructions(task: str, api_key: str) -> tuple[int | None, list[str], list[str]]:
     """자연어 지시사항을 LLM을 사용하여 파싱하고, 배달 제한 개수와 우선순위 색상 리스트를 반환합니다."""
-    local_limit, local_priorities = parse_task_instructions_local(task)
-    if local_limit is not None or local_priorities or task.strip() == TASK or not api_key:
-        return local_limit, local_priorities
+    local_limit, local_priorities, local_skipped = parse_task_instructions_local(task)
+    if local_limit is not None or local_priorities or local_skipped or task.strip() == TASK or not api_key:
+        return local_limit, local_priorities, local_skipped
 
     prompt = (
         "Analyze the following natural language task instruction for a warehouse robot. "
         "Extract two pieces of information:\n"
         "1. The maximum number of cubes to deliver (if specified, e.g. 'only deliver 4' or '4개만' -> 4. If not specified or if it's the standard task of all six cubes, return null).\n"
-        "2. The order of colors to prioritize (if specified, e.g. 'deliver red and blue first' or '빨간색과 파란색을 먼저' -> ['red', 'blue']. If not specified, return an empty list).\n\n"
+        "2. The order of colors to prioritize (if specified, e.g. 'deliver red and blue first' or '빨간색과 파란색을 먼저' -> ['red', 'blue']. If not specified, return an empty list).\n"
+        "3. The colors to skip/exclude (if specified, e.g. 'skip yellow' or '노란색 제외' -> ['yellow']. If not specified, return an empty list).\n\n"
         "Respond ONLY with a JSON object in this format:\n"
-        '{"delivery_limit": int or null, "priority_colors": ["color1", "color2", ...]}\n'
+        '{"delivery_limit": int or null, "priority_colors": ["color1", "color2", ...], "skipped_colors": ["color1", ...]}\n'
         "Do not include any explanation or code blocks outside the JSON."
     )
     from menlo_runner.llm import call_llm
@@ -1692,8 +1776,10 @@ async def visual_navigate_to_target(
         return False
 
     # 루프 진입 전 고개를 한 번만 정면으로 고정하여 매 스텝마다 set_head를 호출하는 오버헤드 차단
-    pitch = 0.02 if target_kind == "pad" else 0.15
-    await set_head_cached(ctx, memory, yaw=0.0, pitch=pitch)
+    base_pitch = _head_pitch_for_target(
+        target_kind, has_held=memory.held_color is not None
+    )
+    await set_head_cached(ctx, memory, yaw=0.0, pitch=base_pitch)
     _ensure_nav_track(memory, target_kind, target_color)
 
     arrival_area = PLACE_BLOB_AREA if target_kind == "pad" else PICK_BLOB_AREA
@@ -1702,6 +1788,9 @@ async def visual_navigate_to_target(
     pad_forward_steps = 0
     last_cube_area: int | None = None
     stagnant_cube_steps = 0
+    
+    last_position = None
+    stuck_steps = 0
 
     max_steps = 10 if target_kind == "pad" else 20
     for step in range(1, max_steps + 1):
@@ -1715,7 +1804,7 @@ async def visual_navigate_to_target(
                     centroid=d.centroid,
                     bbox=d.bbox,
                     head_yaw=0.0,
-                    head_pitch=pitch,
+                    head_pitch=base_pitch,
                 )
                 for d in obs_list
             ]
@@ -1780,6 +1869,21 @@ async def visual_navigate_to_target(
             f"centroid={target_det.centroid} bbox={target_det.bbox}"
         )
 
+        if _should_peek_down(target_kind, area=area, angle_deg=angle, step=step):
+            peek_detections = await peek_down_for_close_target(
+                ctx, memory, target_color, target_kind=target_kind, base_pitch=base_pitch
+            )
+            if peek_detections:
+                obs_list = peek_detections
+                target_det = _select_target_detection(obs_list, target_color, target_kind, memory)
+                if not target_det:
+                    print(f"Lost {target_kind} {target_color} during close peek!")
+                    _clear_nav_track(memory)
+                    await set_head_cached(ctx, memory, yaw=0.0, pitch=base_pitch)
+                    return False
+                area = target_det.blob_area
+                angle = target_det.angle_deg
+
         if _navigation_arrived(
             target_kind=target_kind,
             area=area,
@@ -1790,7 +1894,31 @@ async def visual_navigate_to_target(
             step=step,
         ):
             print(f"Reached {target_color} target (area {area} >= {arrival_area})")
+            if target_kind == "pad":
+                api_key = os.environ.get("TOKAMAK_API_KEY", "")
+                if api_key:
+                    print("Verifying if wooden pad is actually present under the sign...")
+                    prompt = (
+                        "You are a warehouse robot. You are looking at a destination sign. "
+                        "Is there a wooden pallet/pad clearly visible on the floor right beneath this sign? "
+                        "Respond with ONLY 'yes' or 'no'."
+                    )
+                    from menlo_runner.llm import ask_vlm
+                    jpeg = await get_camera_frame(ctx)
+                    import asyncio
+                    reply = await asyncio.to_thread(ask_vlm, jpeg, prompt, api_key=api_key)
+                    print(f"VLM Pad Verification: {reply}")
+                    if "no" in reply.lower():
+                        print("No wooden pad found! Marking this pad as fake/invalid.")
+                        # Add to failed attempts so it explores elsewhere
+                        memory.failed_attempts[target_color] = memory.failed_attempts.get(target_color, 0) + 1
+                        _clear_nav_track(memory)
+                        await set_head_cached(ctx, memory, yaw=0.0, pitch=base_pitch)
+                        return False
+                memory.pad_verified = True
+            
             _clear_nav_track(memory)
+            await set_head_cached(ctx, memory, yaw=0.0, pitch=base_pitch)
             return True
 
         if target_kind == "cube":
@@ -1828,7 +1956,27 @@ async def visual_navigate_to_target(
         ):
             print(f"Reached {target_color} target (area {area} >= {arrival_area})")
             _clear_nav_track(memory)
+            await set_head_cached(ctx, memory, yaw=0.0, pitch=base_pitch)
             return True
+
+        # Stuck detection
+        from menlo_runner.programs.project.ko.level_2_starter_ko import get_robot_status
+        status = await get_robot_status(ctx, memory)
+        current_pos = status.robot.pose.position if (status and status.robot and status.robot.pose) else None
+        if current_pos and last_position and moved_toward_target:
+            dist = math.hypot(current_pos[0] - last_position[0], current_pos[1] - last_position[1])
+            if dist < 0.05:
+                stuck_steps += 1
+            else:
+                stuck_steps = 0
+                
+            if stuck_steps >= 3:
+                print(f"Nav step {step}: Stuck detected! Distance moved: {dist:.3f}m. Executing avoidance maneuver.")
+                await move_velocity(ctx, vx=-0.3, wz=0.5, duration_s=1.5)
+                stuck_steps = 0
+                last_position = current_pos
+                continue
+        last_position = current_pos
 
         # P-제어기를 통한 비례 조향 각속도 및 거리 기반 적응형 전진 속도/시간
         # pad 표지판은 화면 가장자리에 걸리기 쉬워 전진/횡이동/회전을 함께 써서 접근한다.

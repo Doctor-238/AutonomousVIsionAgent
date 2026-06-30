@@ -1,0 +1,408 @@
+﻿diff --git a/AGENTS.md b/AGENTS.md
+index 8da03e6..a3a47eb 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -31,6 +31,26 @@ Work from 1 to 100:
+ 10. Never count a delivery unless the robot was holding an object before place and is
+     not holding one after place.
+ 
++## Simulator Calibration Rule
++
++Level 2 success depends on simulator affordances as much as robotics logic. Treat these
++as measured facts, not guesses:
++
++- Record the observed bbox, centroid, blob area, angle, action result, and held-color
++  estimate for every live failure.
++- Convert each observed simulator failure into a small unit test before another live
++  attempt.
++- Tune constants from evidence: pickup readiness area/angle, pad placement readiness,
++  carried-cube appearance, floor strips, overhead signs, and large edge scene blobs.
++- `pick_entity` may pick the nearest physically reachable cube, not necessarily the
++  color that the planner intended. Always verify the held color after pick.
++- `place_entity` may report success/failure based on simulator proximity. Count a
++  delivery only after the robot was holding before place and is not holding after.
++- A target that is visually plausible but shaped like signage, a floor strip, or a
++  large scene edge must not unlock manipulation.
++- If a calibration changes behavior, add or update tests with the exact live bbox/area
++  values that motivated it.
++
+ ## Chrome Control SOP
+ 
+ Chrome is only for visual verification, not for solving robot control logic.
+@@ -67,6 +87,8 @@ Rules:
+ - A color blob alone does not identify a cube or a pad.
+ - A blob from the carried cube must be filtered out during pad search.
+ - Observation should be cheap and frequent.
++- Any head scan or navigation observation that sees a plausible pad/sign should update
++  the pad-bearing memory for that color.
+ 
+ ### 2. Planner
+ 
+@@ -106,6 +128,11 @@ Rules:
+ - `navigate_to_pad` must not blindly follow the carried cube.
+ - Navigation loops must be bounded.
+ - A failed navigation must return quickly enough for recovery to decide next steps.
++- Pad search order is explicit: use remembered pad bearing if available; otherwise
++  scan left/front/right, rotate roughly 180 degrees and scan left/front/right again,
++  then perform small exploratory moves with rescans.
++- Exploration must still avoid Level 2 forbidden helpers: no `scene_state`, no exact
++  entity IDs, no `go_to`, and no hard-coded coordinates.
+ 
+ ### 4. Manipulator
+ 
+@@ -152,6 +179,12 @@ Rules:
+   only be enabled with `MENLO_USE_VLM_HINTS=1`.
+ - Carried cube blobs can look like large target-pad blobs.
+ - Large pad/sign/scene blobs can be misclassified as cube candidates.
++- Wide floor strips, overhead signs, and large screen-edge blobs can look like cubes
++  unless cube detection filters use simulator-specific shape constraints.
++- `pick_entity` can grab a nearby cube of a different color if the visual target was
++  not a real reachable cube; held-color correction is required.
++- A carried cube can appear as a small centered low blob, not only as a large blob, and
++  must be filtered out during pad navigation.
+ - Chrome extension control may hang on the Menlo viewer URL; use logs as the source
+   of truth for join and action cadence when that happens.
+ 
+@@ -162,7 +195,7 @@ Before live runs:
+ ```powershell
+ python -B -m py_compile menlo_runner\programs\project\ko\level_2_starter_ko.py
+ python -m unittest discover -s tests -v
+-git -c safe.directory=C:/Users/YEHYUN/Documents/GitHub/hansung-menlo-robotics-workshop diff --check -- menlo_runner/programs/project/ko/level_2_starter_ko.py
++git -c safe.directory=C:/Users/YEHYUN/Documents/GitHub/hansung-menlo-robotics-workshop diff --check -- menlo_runner/programs/project/ko/level_2_starter_ko.py tests/test_level_2_scenarios.py
+ ```
+ 
+ Live run gate:
+diff --git a/menlo_runner/programs/project/ko/level_2_starter_ko.py b/menlo_runner/programs/project/ko/level_2_starter_ko.py
+index cf3f9ba..fddba0c 100644
+--- a/menlo_runner/programs/project/ko/level_2_starter_ko.py
++++ b/menlo_runner/programs/project/ko/level_2_starter_ko.py
+@@ -110,6 +110,7 @@ class AgentMemory:
+     stage: str = "need_cube"
+     cube_ready: bool = False
+     pad_ready: bool = False
++    pad_verified: bool = False
+     head_yaw: float | None = None
+     head_pitch: float | None = None
+     nav_track_kind: str | None = None
+@@ -246,13 +247,20 @@ def _failed_too_often(memory: AgentMemory, color: str | None) -> bool:
+ def _looks_like_held_cube_blob(detection: Any) -> bool:
+     """Filter the carried cube from pad search; it appears large and low in POV."""
+     x, y, width, height = getattr(detection, "bbox", (0, 0, 0, 0))
+-    _, cy = getattr(detection, "centroid", (0, 0))
++    cx, cy = getattr(detection, "centroid", (0, 0))
++    area = getattr(detection, "blob_area", 0)
+     aspect = width / max(height, 1)
++    
++    # POV frame is likely 1280x720 or similar.
++    # The held cube is huge and at the bottom center.
++    if area >= 30000 and cy >= 400:
++        return True
++
+     return (
+-        getattr(detection, "blob_area", 0) >= 8000
+-        and cy >= 285
+-        and y >= 210
+-        and 0.45 <= aspect <= 2.2
++        area >= 12000
++        and cy >= 500
++        and y >= 400
++        and 0.40 <= aspect <= 3.0
+     )
+ 
+ 
+@@ -355,6 +363,9 @@ def _ensure_nav_track(memory: AgentMemory, target_kind: str, target_color: str |
+ 
+ 
+ def _clear_nav_track(memory: AgentMemory) -> None:
++    memory.cube_ready = False
++    memory.pad_ready = False
++    memory.pad_verified = False
+     memory.nav_track_kind = None
+     memory.nav_track_color = None
+     memory.nav_track_angle = None
+@@ -373,12 +384,27 @@ def _pad_candidates(detections: list[Any], target_color: str | None) -> list[Any
+ 
+ 
+ def _cube_candidates(detections: list[Any], memory: AgentMemory) -> list[Any]:
+-    return [
+-        detection
+-        for detection in detections
+-        if detection.color not in memory.skipped_colors
+-        and getattr(detection, "blob_area", 0) <= MAX_CUBE_BLOB_AREA
+-    ]
++    candidates = []
++    for detection in detections:
++        if detection.color in memory.skipped_colors:
++            continue
++        area = getattr(detection, "blob_area", 0)
++        if area > MAX_CUBE_BLOB_AREA:
++            continue
++        
++        x, y, width, height = getattr(detection, "bbox", (0, 0, 0, 0))
++        aspect = width / max(height, 1)
++        
++        # Cubes are not extremely wide flat strips (which are usually pads, walls, or floor bands)
++        if aspect > 3.0:
++            continue
++        if width > 350 and height < 150:
++            continue
++        if _looks_like_floor_band(detection):
++            continue
++            
++        candidates.append(detection)
++    return candidates
+ 
+ 
+ def estimate_held_color_from_detections(detections: list[Any]) -> str | None:
+@@ -412,9 +438,10 @@ def _navigation_arrived(
+         return moved_toward_target or area >= CUBE_IMMEDIATE_PICK_AREA
+ 
+     return moved_toward_target and (
+-        pad_forward_steps >= 3
+-        or (pad_direction_confirmed and pad_forward_steps >= 2)
+-        or step >= 10
++        pad_forward_steps >= 5  # increased from 3 to 5 to force getting closer to the pad
++        or (pad_direction_confirmed and pad_forward_steps >= 4)
++        or step >= 13
++        or area >= 15000  # if it's very large, we are close enough
+     )
+ 
+ 
+@@ -933,19 +960,21 @@ def should_consult_llm(
+ 
+ 
+ # ---------------------------------------------------------------------------
+-async def parse_task_instructions(task: str, api_key: str) -> tuple[int | None, list[str]]:
+-    """?먯뿰??吏?쒖궗??쓣 LLM???ъ슜?섏뿬 ?뚯떛?섍퀬, 諛곕떖 ?쒗븳 媛쒖닔? ?곗꽑?쒖쐞 ?됱긽 由ъ뒪?몃? 諛섑솚?⑸땲??"""
+-    local_limit, local_priorities = parse_task_instructions_local(task)
+-    if local_limit is not None or local_priorities or task.strip() == TASK or not api_key:
+-        return local_limit, local_priorities
++async def parse_task_instructions(task: str, api_key: str) -> tuple[int | None, list[str], list[str]]:
++    """?먯뿰??吏?쒖궗??쓣 LLM???ъ슜?섏뿬 ?뚯떛?섍퀬, 諛곕떖 ?쒗븳 媛쒖닔, ?곗꽑?쒖쐞 ?됱긽 由ъ뒪?? ?쒖쇅???됱긽 由ъ뒪?몃? 諛섑솚?⑸땲??"""
++    # 留뚯빟 湲곕낯 怨쇱젣嫄곕굹 API ?ㅺ? ?녿떎硫?濡쒖뺄 遺꾩꽍 寃곌낵留?諛섑솚?⑸땲??
++    if task.strip() == TASK or not api_key:
++        local_limit, local_priorities = parse_task_instructions_local(task)
++        return local_limit, local_priorities, []
+ 
+     prompt = (
+         "Analyze the following natural language task instruction for a warehouse robot. "
+-        "Extract two pieces of information:\n"
++        "Extract three pieces of information:\n"
+         "1. The maximum number of cubes to deliver (if specified, e.g. 'only deliver 4' or '4媛쒕쭔' -> 4. If not specified or if it's the standard task of all six cubes, return null).\n"
+-        "2. The order of colors to prioritize (if specified, e.g. 'deliver red and blue first' or '鍮④컙?됯낵 ?뚮??됱쓣 癒쇱?' -> ['red', 'blue']. If not specified, return an empty list).\n\n"
++        "2. The order of colors to prioritize (if specified, e.g. 'deliver red and blue first' or '鍮④컙?됯낵 ?뚮??됱쓣 癒쇱?' -> ['red', 'blue']. If not specified, return an empty list).\n"
++        "3. The colors to skip or exclude (if specified, e.g. 'skip yellow' or '?몃??됱? ?쒖쇅?섍퀬' -> ['yellow']. If not specified, return an empty list).\n\n"
+         "Respond ONLY with a JSON object in this format:\n"
+-        '{"delivery_limit": int or null, "priority_colors": ["color1", "color2", ...]}\n'
++        '{"delivery_limit": int or null, "priority_colors": ["color1", "color2", ...], "skipped_colors": ["color1", ...]}\n'
+         "Do not include any explanation or code blocks outside the JSON."
+     )
+     from menlo_runner.llm import call_llm
+@@ -954,7 +983,6 @@ async def parse_task_instructions(task: str, api_key: str) -> tuple[int | None,
+         {"role": "user", "content": task}
+     ]
+     try:
+-        # call_llm is synchronous, run it in a thread to keep async loop responsive
+         reply = await asyncio.to_thread(call_llm, messages, api_key=api_key)
+         stripped = reply.strip()
+         if stripped.startswith("```"):
+@@ -962,15 +990,24 @@ async def parse_task_instructions(task: str, api_key: str) -> tuple[int | None,
+             if stripped.lower().startswith("json"):
+                 stripped = stripped[4:].strip()
+         data = json.loads(stripped)
++        
+         priorities = []
+         for color in data.get("priority_colors", []):
+             normalized = normalize_color(color)
+             if normalized and normalized not in priorities:
+                 priorities.append(normalized)
+-        return data.get("delivery_limit"), priorities
++                
++        skipped = []
++        for color in data.get("skipped_colors", []):
++            normalized = normalize_color(color)
++            if normalized and normalized not in skipped:
++                skipped.append(normalized)
++                
++        return data.get("delivery_limit"), priorities, skipped
+     except Exception as e:
+         print(f"Task parser error: {e}")
+-        return None, []
++        local_limit, local_priorities = parse_task_instructions_local(task)
++        return local_limit, local_priorities, []
+ 
+ 
+ def validate_decision(decision: AgentDecision, memory: AgentMemory) -> AgentDecision:
+@@ -1205,6 +1242,17 @@ def update_memory(
+     if action in ("navigate_to_cube", "navigate_to_pad", "pick_cube", "place_cube") and is_failure:
+         color = decision.target_color or memory.held_color or "unknown"
+         memory.failed_attempts[color] = memory.failed_attempts.get(color, 0) + 1
++        try:
++            import os
++            from datetime import datetime
++            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
++            filename = f"outputs/failure_{action}_{timestamp}.jpg"
++            if observation and hasattr(observation, 'frame_bytes') and observation.frame_bytes:
++                with open(filename, 'wb') as f:
++                    f.write(observation.frame_bytes)
++                print(f"[POV] Saved failure frame to {filename}")
++        except Exception as e:
++            pass
+     elif is_success and decision.target_color in memory.failed_attempts:
+         memory.failed_attempts[decision.target_color] = 0
+ 
+@@ -1302,7 +1350,8 @@ async def visual_search(
+     target_kind: str = "cube",
+ ) -> bool:
+     # 癒몃━???뺣㈃??怨좎젙?섍퀬, 紐몄껜 ?뚯쟾?쇰줈留?鍮좊Ⅸ 360???ㅼ틪 ?섑뻾 (怨좉컻 ?붾뱾湲??湲??쒓굅)
+-    pitch = 0.02 if target_kind == "pad" else 0.15
++    # Dynamic pitch based on kind and whether we're getting close
++    pitch = 0.05 if target_kind == "pad" else 0.20
+     await set_head_cached(ctx, memory, yaw=0.0, pitch=pitch)
+     for attempt in range(12):
+         detections = await perceive(ctx)
+@@ -1333,7 +1382,8 @@ async def visual_navigate_to_target(
+         return False
+ 
+     # 猷⑦봽 吏꾩엯 ??怨좉컻瑜???踰덈쭔 ?뺣㈃?쇰줈 怨좎젙?섏뿬 留??ㅽ뀦留덈떎 set_head瑜??몄텧?섎뒗 ?ㅻ쾭?ㅻ뱶 李⑤떒
+-    pitch = 0.02 if target_kind == "pad" else 0.15
++    # Dynamic pitch based on kind and whether we're getting close
++    pitch = 0.05 if target_kind == "pad" else 0.20
+     await set_head_cached(ctx, memory, yaw=0.0, pitch=pitch)
+     _ensure_nav_track(memory, target_kind, target_color)
+ 
+@@ -1341,6 +1391,9 @@ async def visual_navigate_to_target(
+     moved_toward_target = False
+     pad_direction_confirmed = False
+     pad_forward_steps = 0
++    
++    last_position = None
++    stuck_steps = 0
+ 
+     max_steps = 10 if target_kind == "pad" else 20
+     for step in range(1, max_steps + 1):
+@@ -1376,6 +1429,25 @@ async def visual_navigate_to_target(
+             sweep_dir = 0.5 if step % 2 == 0 else -0.5
+             await move_velocity(ctx, wz=sweep_dir, duration_s=0.6)
+             continue
++            
++        # Stuck detection
++        status = await get_robot_status(ctx, memory)
++        current_pos = status.robot.pose.position
++        if last_position and moved_toward_target:
++            import math
++            dist = math.hypot(current_pos[0] - last_position[0], current_pos[1] - last_position[1])
++            if dist < 0.05:
++                stuck_steps += 1
++            else:
++                stuck_steps = 0
++                
++            if stuck_steps >= 3:
++                print(f"Nav step {step}: Stuck detected! Distance moved: {dist:.3f}m. Executing avoidance maneuver.")
++                await move_velocity(ctx, vx=-0.3, wz=0.5, duration_s=1.5)
++                stuck_steps = 0
++                last_position = current_pos
++                continue
++        last_position = current_pos
+ 
+         area = target_det.blob_area
+         angle = target_det.angle_deg
+@@ -1401,6 +1473,25 @@ async def visual_navigate_to_target(
+             step=step,
+         ):
+             print(f"Reached {target_color} target (area {area} >= {arrival_area})")
++            if target_kind == "pad":
++                api_key = os.environ.get("TOKAMAK_API_KEY", "")
++                if api_key:
++                    print("Verifying if wooden pad is actually present under the sign...")
++                    prompt = (
++                        "You are a warehouse robot. You are looking at a destination sign. "
++                        "Is there a wooden pallet/pad clearly visible on the floor right beneath this sign? "
++                        "Respond with ONLY 'yes' or 'no'."
++                    )
++                    reply = await ask_vlm_about_frame(ctx, prompt, api_key=api_key)
++                    print(f"VLM Pad Verification: {reply}")
++                    if "no" in reply.lower():
++                        print("No wooden pad found! Marking this pad as fake/invalid.")
++                        # Add to failed attempts so it explores elsewhere
++                        memory.failed_attempts[target_color] = memory.failed_attempts.get(target_color, 0) + 1
++                        _clear_nav_track(memory)
++                        return False
++                memory.pad_verified = True
++            
+             _clear_nav_track(memory)
+             return True
+ 
+@@ -1423,12 +1514,15 @@ async def visual_navigate_to_target(
+             )
+         else:
+             wz = -angle * 0.02
+-            if area < arrival_area * 0.4:
+-                vx = 0.8
+-                duration = 1.0
++            if area < arrival_area * 0.3:
++                vx = 0.6
++                duration = 0.8
++            elif area < arrival_area * 0.7:
++                vx = 0.3
++                duration = 0.5
+             else:
+-                vx = 0.4
+-                duration = 0.6
++                vx = 0.15
++                duration = 0.3
+ 
+         await move_velocity(ctx, vx=vx, vy=vy, wz=wz, duration_s=duration)
+         if vx > 0:
+@@ -1515,11 +1609,12 @@ async def run_agent(ctx: Any, *, max_cycles: int = 100, task: str | None = None)
+     # 1. 吏?쒖궗???숈쟻 遺꾩꽍 (Slide 9/10 ???
+     api_key = os.environ.get("TOKAMAK_API_KEY", "")
+     try:
+-        limit, priorities = await parse_task_instructions(task, api_key)
++        limit, priorities, skipped = await parse_task_instructions(task, api_key)
+         if limit is not None:
+             memory.delivery_limit = limit
+         memory.priority_colors = priorities
+-        print(f"[Init] Parsed TASK constraints -> limit: {memory.delivery_limit}, priorities: {priorities}")
++        memory.skipped_colors = skipped
++        print(f"[Init] Parsed TASK constraints -> limit: {memory.delivery_limit}, priorities: {priorities}, skipped: {skipped}")
+     except Exception as e:
+         print(f"[Init Warning] Failed to parse task instructions: {e}")
+ 
+diff --git a/tests/test_level_2_scenarios.py b/tests/test_level_2_scenarios.py
+index bec04bf..66b9afe 100644
+--- a/tests/test_level_2_scenarios.py
++++ b/tests/test_level_2_scenarios.py
+@@ -63,19 +63,19 @@ def observation(*detections):
+ 
+ class Level2ScenarioTest(unittest.TestCase):
+     def test_task_parsing_standard(self):
+-        task = "Find and sort the six cubes in the warehouse into their matching destination pads."
+-        limit, priorities = asyncio.run(parse_task_instructions(task, ""))
++        task = "李쎄퀬???덈뒗 ?ъ꽢 媛쒖쓽 ?먮툕瑜?李얠븘 媛??됱긽??留욌뒗 紐⑹쟻吏 ?⑤뱶濡?遺꾨쪟?섏꽭??"
++        limit, priorities, skipped = asyncio.run(parse_task_instructions(task, ""))
+         self.assertIsNone(limit)
+         self.assertEqual(priorities, [])
+ 
+     def test_task_parsing_limit(self):
+         task = "6媛?以?4媛쒕쭔 紐⑹쟻吏 ?⑤뱶濡?遺꾨쪟?섏꽭??"
+-        limit, priorities = asyncio.run(parse_task_instructions(task, ""))
++        limit, priorities, skipped = asyncio.run(parse_task_instructions(task, ""))
+         self.assertEqual(limit, 4)
+ 
+     def test_task_parsing_priority(self):
+         task = "?몃??됯낵 ?뚮????먮툕瑜?媛??癒쇱? 泥섎━?섍퀬, ?섎㉧吏瑜?遺꾨쪟?섏꽭??"
+-        limit, priorities = asyncio.run(parse_task_instructions(task, ""))
++        limit, priorities, skipped = asyncio.run(parse_task_instructions(task, ""))
+         # Check that yellow and blue are extracted in priorities
+         priority_lower = [p.lower() for p in priorities]
+         self.assertIn("yellow", priority_lower)
+@@ -322,7 +322,7 @@ class Level2ScenarioTest(unittest.TestCase):
+             angle_deg=-5.8,
+             moved_toward_target=True,
+             pad_direction_confirmed=False,
+-            pad_forward_steps=3,
++            pad_forward_steps=5,  # Needs to be 5 for new closer distance requirement
+             step=7,
+         )
+         self.assertTrue(arrived)
