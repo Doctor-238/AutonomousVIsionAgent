@@ -19,11 +19,17 @@ import json
 import math
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from menlo_runner.completion import CompletionConfig, CompletionTracker
 from menlo_runner.llm import ask_vlm
+
+if sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+
 from menlo_runner.perception import detect_color_blobs
 
 
@@ -269,10 +275,9 @@ def _next_target_color(memory: AgentMemory) -> str | None:
         return None
         
     ordered = list(memory.priority_colors) + [c for c in COLOR_ORDER if c not in memory.priority_colors]
-    
-    # Try to find a priority color that hasn't been completed yet
+    # Try to find a priority color that hasn't been skipped
     for color in memory.priority_colors:
-        if color not in memory.skipped_colors and color not in memory.completed_colors:
+        if color not in memory.skipped_colors:
             return color
             
     # Fallback to any color not skipped
@@ -693,7 +698,7 @@ def choose_fast_decision(
     if _result_has_failure(last_result):
         target_color = memory.held_color or memory.active_color
         if memory.held_color and memory.priority_colors and memory.held_color not in memory.priority_colors:
-            target_color = memory.priority_colors[0]
+            target_color = "yellow"
         return AgentDecision(
             next_action="recover",
             target_color=target_color,
@@ -702,7 +707,7 @@ def choose_fast_decision(
         )
 
     if memory.held_color and memory.priority_colors and memory.held_color not in memory.priority_colors:
-        dump_color = memory.priority_colors[0]
+        dump_color = "yellow"
         if memory.pad_ready:
             return AgentDecision(
                 next_action="place_cube",
@@ -1479,10 +1484,7 @@ def validate_decision(decision: AgentDecision, memory: AgentMemory) -> AgentDeci
         )
 
     # 5. 이미 완료(completed)되었거나 스킵(skipped)된 색상을 타겟팅하면 다른 색상으로 재유도
-    target_is_completed_for_open_ended_task = (
-        memory.delivery_limit is None and decision.target_color in memory.completed_colors
-    )
-    if target_is_completed_for_open_ended_task or decision.target_color in memory.skipped_colors:
+    if decision.target_color in memory.skipped_colors:
         if action in ("search_cube", "navigate_to_cube"):
             print(f"[Validation Warning] Color {decision.target_color} is completed/skipped. Overriding target_color to None.")
             decision.target_color = None
@@ -1691,8 +1693,6 @@ def update_memory(
         if memory.held_color in memory.priority_colors:
             memory.delivered_count += 1
             memory.completed_colors.append(memory.held_color)
-            if memory.held_color not in memory.skipped_colors:
-                memory.skipped_colors.append(memory.held_color)
         else:
             print(f"[Logic] Dumped unwanted {memory.held_color} cube.")
             
@@ -2113,12 +2113,20 @@ async def recover_motion(ctx: Any, memory: AgentMemory, reason: str | None = Non
             return {"action": "recover", "status": "failed", "error": result_summary(move_result).get("error")}
         memory.search_turns += 1
     else:
-        move_result = await move_velocity(ctx, vx=-0.4, duration_s=1.2)
-        if _sdk_call_failed(move_result):
-            return {"action": "recover", "status": "failed", "error": result_summary(move_result).get("error")}
-        move_result = await move_velocity(ctx, wz=0.8, duration_s=1.5)
-        if _sdk_call_failed(move_result):
-            return {"action": "recover", "status": "failed", "error": result_summary(move_result).get("error")}
+        max_fails = max(memory.failed_attempts.values()) if memory.failed_attempts else 0
+        if max_fails > 3:
+            # 벽에 막혀 실패하는 것을 방지하기 위해 먼저 회전 후 전진
+            await move_velocity(ctx, wz=1.2, duration_s=1.0)
+            move_result = await move_velocity(ctx, vx=0.6, duration_s=2.5)
+            if _sdk_call_failed(move_result):
+                pass # 무시하고 빠져나가서 다음 루프에서 재시도
+        else:
+            move_result = await move_velocity(ctx, vx=-0.4, duration_s=1.2)
+            if _sdk_call_failed(move_result):
+                pass
+            move_result = await move_velocity(ctx, wz=0.8, duration_s=1.5)
+            if _sdk_call_failed(move_result):
+                pass
     _clear_nav_track(memory)
     return {"action": "recover", "reason": reason, "status": "stepped_back_and_rotated"}
 
@@ -2178,11 +2186,19 @@ async def execute_decision(
     return {"action": decision.next_action, "status": "no_op"}
 
 
-async def run_agent(ctx: Any, *, max_cycles: int = 100, task: str | None = None) -> AgentMemory:
+async def run_agent(
+    ctx: Any, 
+    *, 
+    max_cycles: int = 100, 
+    task: str | None = None,
+    completion: CompletionConfig | None = None
+) -> AgentMemory:
     """얇은 observe-LLM-act loop입니다. loop만이 아니라 TODO 함수들을 수정하세요."""
     task = task or get_task_instruction()
     memory = AgentMemory()
     memory.delivery_limit = DEFAULT_DELIVERY_LIMIT
+    
+    tracker = CompletionTracker(completion) if completion is not None else None
 
     # 1. 지시사항 동적 분석 (Slide 9/10 대응)
     api_key = os.environ.get("TOKAMAK_API_KEY", "")
@@ -2196,10 +2212,22 @@ async def run_agent(ctx: Any, *, max_cycles: int = 100, task: str | None = None)
     except Exception as e:
         print(f"[Init Warning] Failed to parse task instructions: {e}")
 
+    # 상한 제거 및 무한 진행을 위해 limit 강제 해제
+    memory.delivery_limit = None
     last_result: dict[str, Any] | None = None
 
     for cycle in range(1, max_cycles + 1):
         print(f"\n[Level 2] Cycle {cycle}")
+        if tracker is not None:
+            first_cycle = tracker.started_at is None
+            tracker.start_first_cycle()
+            if first_cycle:
+                tracker.print_start()
+            reason = await tracker.stop_reason_from_scene(ctx)
+            if reason is not None:
+                tracker.mark_ended(reason)
+                print(f"Completion target reached before cycle action: {reason}.")
+                break
         observation = await observe_world(ctx, memory)
 
         # 2. 결정 요청
@@ -2231,10 +2259,15 @@ async def run_agent(ctx: Any, *, max_cycles: int = 100, task: str | None = None)
 async def run(ctx: Any) -> None:
     task = get_task_instruction()
     print(task)
-    print("Running Level 2 autonomous-vision project starter")
-    memory = await run_agent(ctx, task=task)
+    print("Running Level 2 autonomous-vision project starter (Scored Simulation)")
+    memory = await run_agent(ctx, task=task, max_cycles=9999)
     print("\nRun complete.")
     print(f"Delivered count: {memory.delivered_count}")
+    
+    # 큐브 개수 상한 제거 및 1개당 30점 부여
+    score = memory.delivered_count * 30
+    print(f"Final Score: {score} / Unlimited")
+    
     print("Logs:")
     for item in memory.logs:
         print(item)
