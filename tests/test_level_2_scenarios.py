@@ -14,11 +14,14 @@ from menlo_runner.programs.project.ko.level_2_starter_ko import (
     Observation,
     ScannedDetection,
     _navigation_arrived,
+    _navigation_velocity_command,
     _pad_candidates,
     _select_target_detection,
     choose_fast_decision,
     get_robot_status,
+    move_velocity,
     parse_task_instructions,
+    result_summary,
     update_memory,
     validate_decision,
 )
@@ -36,6 +39,11 @@ class MockStatus:
 class FailingStatusContext:
     async def state(self, key):
         raise TimeoutError(f"{key} unavailable")
+
+
+class FailingInvokeContext:
+    async def invoke(self, skill_name, args, timeout_s=None):
+        raise TimeoutError(f"{skill_name} rpc timeout")
 
 
 def detection(
@@ -102,7 +110,14 @@ class Level2ScenarioTest(unittest.TestCase):
 
     def test_fast_decision_navigates_before_pick(self):
         memory = AgentMemory()
-        decision = choose_fast_decision(observation(detection("red")), memory)
+        cube_blob = detection(
+            "red",
+            area=3600,
+            angle=-1.5,
+            centroid=(613, 408),
+            bbox=(567, 381, 92, 53),
+        )
+        decision = choose_fast_decision(observation(cube_blob), memory)
         self.assertEqual(decision.next_action, "navigate_to_cube")
         self.assertEqual(decision.target_color, "red")
 
@@ -153,6 +168,51 @@ class Level2ScenarioTest(unittest.TestCase):
         usable_pad_blob = detection("blue", area=26000, angle=-5.0)
         candidates = _pad_candidates([large_held_blob, usable_pad_blob], "blue")
         self.assertEqual(candidates, [usable_pad_blob])
+
+    def test_pad_candidates_filter_small_carried_cube_blob(self):
+        carried_cube_blob = detection(
+            "blue",
+            area=2366,
+            angle=-0.9,
+            centroid=(620, 347),
+            bbox=(595, 321, 52, 55),
+        )
+        usable_pad_marker = detection(
+            "blue",
+            area=9000,
+            angle=8.0,
+            centroid=(850, 80),
+            bbox=(790, 25, 120, 90),
+        )
+        candidates = _pad_candidates([carried_cube_blob, usable_pad_marker], "blue")
+        self.assertEqual(candidates, [usable_pad_marker])
+
+    def test_pad_candidates_require_container_marker_shape(self):
+        low_color_square = detection(
+            "blue",
+            area=8500,
+            angle=2.0,
+            centroid=(615, 430),
+            bbox=(560, 380, 110, 100),
+        )
+        usable_pad_marker = detection(
+            "blue",
+            area=7600,
+            angle=-4.0,
+            centroid=(770, 145),
+            bbox=(720, 95, 100, 90),
+        )
+        candidates = _pad_candidates([low_color_square, usable_pad_marker], "blue")
+        self.assertEqual(candidates, [usable_pad_marker])
+
+    def test_fast_decision_uses_known_pad_bearing(self):
+        memory = AgentMemory(
+            held_color="blue",
+            known_pad_bearings={"blue": {"bearing_deg": -35.0, "area": 9000}},
+        )
+        decision = choose_fast_decision(observation(), memory)
+        self.assertEqual(decision.next_action, "navigate_to_pad")
+        self.assertEqual(decision.target_color, "blue")
 
     def test_pad_selector_prefers_marker_over_floor_band(self):
         memory = AgentMemory(held_color="blue")
@@ -221,6 +281,111 @@ class Level2ScenarioTest(unittest.TestCase):
         selected = _select_target_detection([floor_band, cube_blob], "red", "cube", memory)
         self.assertEqual(selected, cube_blob)
 
+    def test_cube_selector_rejects_live_floor_strip_shape(self):
+        memory = AgentMemory()
+        live_green_strip = detection(
+            "green",
+            area=32961,
+            angle=-3.4,
+            centroid=(568, 579),
+            bbox=(255, 528, 618, 88),
+        )
+        blue_cube = detection(
+            "blue",
+            area=9000,
+            angle=2.0,
+            centroid=(620, 310),
+            bbox=(580, 270, 80, 80),
+        )
+        self.assertIsNone(_select_target_detection([live_green_strip], "green", "cube", memory))
+        selected = _select_target_detection([live_green_strip, blue_cube], None, "cube", memory)
+        self.assertEqual(selected, blue_cube)
+
+    def test_cube_selector_rejects_live_overhead_sign_shape(self):
+        memory = AgentMemory()
+        live_blue_sign = detection(
+            "blue",
+            area=18699,
+            angle=5.6,
+            centroid=(760, 57),
+            bbox=(685, 0, 203, 138),
+        )
+        green_cube = detection(
+            "green",
+            area=9000,
+            angle=-2.0,
+            centroid=(620, 330),
+            bbox=(580, 290, 80, 80),
+        )
+        self.assertIsNone(_select_target_detection([live_blue_sign], "blue", "cube", memory))
+        selected = _select_target_detection([live_blue_sign, green_cube], None, "cube", memory)
+        self.assertEqual(selected, green_cube)
+
+    def test_cube_selector_rejects_destination_marker_shape(self):
+        memory = AgentMemory()
+        blue_destination_marker = detection(
+            "blue",
+            area=7600,
+            angle=3.0,
+            centroid=(770, 145),
+            bbox=(720, 95, 100, 90),
+        )
+        real_blue_cube = detection(
+            "blue",
+            area=3600,
+            angle=-1.5,
+            centroid=(613, 408),
+            bbox=(567, 381, 92, 53),
+        )
+        self.assertIsNone(_select_target_detection([blue_destination_marker], "blue", "cube", memory))
+        selected = _select_target_detection(
+            [blue_destination_marker, real_blue_cube],
+            "blue",
+            "cube",
+            memory,
+        )
+        self.assertEqual(selected, real_blue_cube)
+
+    def test_cube_selector_rejects_live_edge_scene_blob(self):
+        memory = AgentMemory()
+        edge_blob = detection(
+            "blue",
+            area=46107,
+            angle=-15.5,
+            centroid=(309, 517),
+            bbox=(0, 356, 525, 310),
+        )
+        centered_cube = detection(
+            "blue",
+            area=12000,
+            angle=-3.0,
+            centroid=(590, 350),
+            bbox=(550, 310, 85, 85),
+        )
+        self.assertIsNone(_select_target_detection([edge_blob], "blue", "cube", memory))
+        selected = _select_target_detection([edge_blob, centered_cube], "blue", "cube", memory)
+        self.assertEqual(selected, centered_cube)
+
+    def test_cube_selector_rejects_live_wide_low_patch(self):
+        memory = AgentMemory()
+        low_patch = detection(
+            "green",
+            area=51547,
+            angle=0.0,
+            centroid=(640, 617),
+            bbox=(329, 541, 567, 137),
+        )
+        real_cube = detection(
+            "green",
+            area=9000,
+            angle=3.0,
+            centroid=(600, 360),
+            bbox=(560, 320, 85, 85),
+        )
+        self.assertIsNone(_select_target_detection([low_patch], "green", "cube", memory))
+        selected = _select_target_detection([low_patch, real_cube], "green", "cube", memory)
+        self.assertEqual(selected, real_cube)
+
     def test_update_memory_counts_only_real_place_success(self):
         memory = AgentMemory(held_color="red", pad_ready=True)
         update_memory(
@@ -254,6 +419,14 @@ class Level2ScenarioTest(unittest.TestCase):
         status = asyncio.run(get_robot_status(FailingStatusContext(), memory))
         self.assertIs(status, memory.last_robot_status)
         self.assertEqual(memory.robot_status_failures, 1)
+
+    def test_move_velocity_returns_bounded_failure_on_rpc_timeout(self):
+        result = asyncio.run(move_velocity(FailingInvokeContext(), vx=0.2, duration_s=0.1))
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("TimeoutError", result["error"])
+        summary = result_summary(result)
+        self.assertEqual(summary["status"], "failed")
+        self.assertIn("set_velocity", summary["error"])
 
     def test_cube_arrival_requires_centered_target(self):
         arrived = _navigation_arrived(
@@ -326,6 +499,66 @@ class Level2ScenarioTest(unittest.TestCase):
             step=7,
         )
         self.assertTrue(arrived)
+
+    def test_cube_arrival_allows_sim_pickup_distance_after_approach(self):
+        arrived = _navigation_arrived(
+            target_kind="cube",
+            area=5706,
+            angle_deg=-8.4,
+            moved_toward_target=True,
+            pad_direction_confirmed=False,
+            pad_forward_steps=0,
+            step=9,
+        )
+        self.assertTrue(arrived)
+
+    def test_cube_arrival_allows_precontact_pick_before_pushing(self):
+        arrived = _navigation_arrived(
+            target_kind="cube",
+            area=3505,
+            angle_deg=-1.5,
+            moved_toward_target=False,
+            pad_direction_confirmed=False,
+            pad_forward_steps=0,
+            step=1,
+        )
+        self.assertTrue(arrived)
+
+    def test_cube_servo_is_cautious_before_contact(self):
+        vx, vy, wz, duration = _navigation_velocity_command(
+            target_kind="cube",
+            area=3000,
+            angle=2.0,
+            arrival_area=10000,
+        )
+        self.assertGreater(vx, 0.0)
+        self.assertLessEqual(vx, 0.55)
+        self.assertEqual(vy, 0.0)
+        self.assertLess(duration, 0.8)
+
+    def test_cube_servo_moves_forward_on_moderate_angle_error(self):
+        vx, vy, wz, duration = _navigation_velocity_command(
+            target_kind="cube",
+            area=6000,
+            angle=-8.8,
+            arrival_area=10000,
+        )
+        self.assertGreater(vx, 0.0)
+        self.assertEqual(vy, 0.0)
+        self.assertGreater(wz, 0.0)
+        self.assertLess(duration, 0.8)
+
+    def test_cube_servo_rotates_in_place_on_large_angle_error(self):
+        vx, vy, wz, duration = _navigation_velocity_command(
+            target_kind="cube",
+            area=6000,
+            angle=24.8,
+            arrival_area=10000,
+        )
+        self.assertEqual(vx, 0.0)
+        self.assertEqual(vy, 0.0)
+        self.assertLess(wz, 0.0)
+        self.assertLess(duration, 0.8)
 
 
 if __name__ == "__main__":

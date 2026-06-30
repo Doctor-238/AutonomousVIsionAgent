@@ -42,18 +42,31 @@ COLOR_ORDER = ("red", "green", "blue", "yellow")
 DEFAULT_DELIVERY_LIMIT = 6
 PICK_BLOB_AREA = 10000
 PLACE_BLOB_AREA = 5000
-MAX_CUBE_BLOB_AREA = 55000
-MAX_PAD_TRACK_BLOB_AREA = 38000
+CUBE_PRECONTACT_PICK_AREA = 3200
+CUBE_APPROACH_PICK_AREA = 5000
+# 큐브 자체는 대개 5000~25000 px, 그 이상은 벽/바닥 패치 가능성 높음
+MAX_CUBE_BLOB_AREA = 30000
+# 패드 표지판은 대개 3000~15000 px, 그 이상은 벽/장애물 가능성 높음
+MAX_PAD_TRACK_BLOB_AREA = 15000
 CUBE_CENTERED_DEG = 10.0
 PAD_CENTERED_DEG = 10.0
 CUBE_IMMEDIATE_PICK_AREA = PICK_BLOB_AREA * 2.5
+CUBE_STAGNANT_AREA_DELTA = 250
+CUBE_STAGNANT_STEP_LIMIT = 3
 HEAD_POSE_EPSILON = 0.01
 LLM_DECISION_TIMEOUT_S = 4
 LLM_DECISION_MAX_TOKENS = 160
 ROBOT_STATUS_TIMEOUT_S = 8.0
+HEAD_RPC_TIMEOUT_S = 8.0
+MOVEMENT_RPC_TIMEOUT_S = 8.0
+MANIPULATION_RPC_TIMEOUT_S = 45.0
 MAX_FAILED_ATTEMPTS_PER_COLOR = 3
 RECENT_OUTCOME_LIMIT = 8
 USE_VLM_PAD_HINTS = os.environ.get("MENLO_USE_VLM_HINTS", "").lower() in {"1", "true", "yes"}
+SAVE_POV_FRAMES = os.environ.get("MENLO_SAVE_POV", "").lower() in {"1", "true", "yes"}
+POV_FRAME_LIMIT = max(0, int(os.environ.get("MENLO_POV_FRAME_LIMIT", "120")))
+POV_FRAME_EVERY = max(1, int(os.environ.get("MENLO_POV_FRAME_EVERY", "1")))
+POV_FRAME_DIR = os.environ.get("MENLO_POV_FRAME_DIR", os.path.join("outputs", "pov"))
 COLOR_ALIASES = {
     "red": ("red", "빨간", "빨강", "적색"),
     "green": ("green", "초록", "녹색"),
@@ -118,6 +131,7 @@ class AgentMemory:
     nav_track_lost_steps: int = 0
     last_robot_status: Any | None = None
     robot_status_failures: int = 0
+    known_pad_bearings: dict[str, dict[str, Any]] = field(default_factory=dict)
     search_turns: int = 0
     failed_attempts: dict[str, int] = field(default_factory=dict)
     completed_colors: list[str] = field(default_factory=list)
@@ -245,15 +259,98 @@ def _failed_too_often(memory: AgentMemory, color: str | None) -> bool:
 
 def _looks_like_held_cube_blob(detection: Any) -> bool:
     """Filter the carried cube from pad search; it appears large and low in POV."""
-    x, y, width, height = getattr(detection, "bbox", (0, 0, 0, 0))
-    _, cy = getattr(detection, "centroid", (0, 0))
-    aspect = width / max(height, 1)
-    return (
-        getattr(detection, "blob_area", 0) >= 8000
+    x, y, width, height, cx, cy, area, aspect = _bbox_metrics(detection)
+    del x
+    small_center_hand_blob = (
+        area >= 500
+        and y >= 285
+        and cy >= 320
+        and 520 <= cx <= 760
+        and 0.55 <= aspect <= 1.8
+    )
+    large_low_hand_blob = (
+        area >= 8000
         and cy >= 285
         and y >= 210
         and 0.45 <= aspect <= 2.2
     )
+    return small_center_hand_blob or large_low_hand_blob
+
+
+def _pad_mapping_candidates(detections: list[Any]) -> list[Any]:
+    return [
+        detection
+        for detection in detections
+        if getattr(detection, "blob_area", 0) <= MAX_PAD_TRACK_BLOB_AREA
+        and not _looks_like_held_cube_blob(detection)
+        and (
+            _looks_like_marker_blob(detection)
+            or _looks_like_overhead_sign_blob(detection)
+        )
+    ]
+
+
+def _remember_pad_bearings(memory: AgentMemory, detections: list[Any]) -> None:
+    for detection in _pad_mapping_candidates(detections):
+        color = normalize_color(getattr(detection, "color", None))
+        if color is None:
+            continue
+        bearing = getattr(detection, "full_bearing_deg", getattr(detection, "angle_deg", 0.0))
+        previous = memory.known_pad_bearings.get(color)
+        if previous is None or detection.blob_area >= previous.get("area", 0) * 0.6:
+            memory.known_pad_bearings[color] = {
+                "bearing_deg": round(float(bearing), 1),
+                "area": getattr(detection, "blob_area", 0),
+                "bbox": getattr(detection, "bbox", None),
+            }
+
+
+def _known_pad_sweep_turn(memory: AgentMemory, target_color: str | None, default_turn: float) -> float:
+    if not target_color:
+        return default_turn
+    known = memory.known_pad_bearings.get(target_color)
+    if not known:
+        return default_turn
+    bearing = float(known.get("bearing_deg", 0.0))
+    if abs(bearing) < 8.0:
+        return 0.0
+    return -0.45 if bearing > 0 else 0.45
+
+
+def _navigation_velocity_command(
+    *,
+    target_kind: str,
+    area: int,
+    angle: float,
+    arrival_area: int,
+) -> tuple[float, float, float, float]:
+    """Return vx, vy, wz, duration for bounded visual servoing."""
+    abs_angle = abs(angle)
+
+    if target_kind == "pad":
+        if abs_angle > 8.0:
+            wz = -0.3 if angle > 0 else 0.3
+            vy = -0.2 if angle > 0 else 0.2
+            return 0.2, vy, wz, 0.6
+        wz = -angle * 0.02
+        vx = 0.8 if area < arrival_area * 0.4 else 0.4
+        return vx, 0.0, wz, 1.0 if vx >= 0.8 else 0.6
+
+    if abs_angle > 16.0:
+        wz = -0.4 if angle > 0 else 0.4
+        return 0.0, 0.0, wz, 0.45
+
+    if abs_angle > 8.0:
+        vx = 0.35 if area < CUBE_PRECONTACT_PICK_AREA else 0.22
+        wz = -angle * 0.025
+        return vx, 0.0, wz, 0.45
+
+    wz = -angle * 0.02
+    if area < CUBE_PRECONTACT_PICK_AREA:
+        return 0.55, 0.0, wz, 0.7
+    if area < CUBE_APPROACH_PICK_AREA:
+        return 0.32, 0.0, wz, 0.45
+    return 0.20, 0.0, wz, 0.35
 
 
 def _bbox_metrics(detection: Any) -> tuple[int, int, int, int, int, int, int, float]:
@@ -267,13 +364,48 @@ def _bbox_metrics(detection: Any) -> tuple[int, int, int, int, int, int, int, fl
 def _looks_like_floor_band(detection: Any) -> bool:
     """Long thin colored floor/edge strips are poor navigation anchors."""
     _, _, width, height, _, _, _, aspect = _bbox_metrics(detection)
-    return (width >= 360 and height <= 45 and aspect >= 8.0) or (width >= 700 and height <= 60)
+    return (width >= 360 and height <= 120 and aspect >= 5.0) or (width >= 700 and height <= 80)
 
 
 def _looks_like_marker_blob(detection: Any) -> bool:
+    """표지판 마커 형태: 수직 막대/사각형, 적절한 크기."""
     x, y, width, height, cx, cy, area, aspect = _bbox_metrics(detection)
-    del x, y, cx, cy, area
-    return width >= 20 and height >= 35 and aspect <= 6.5 and not _looks_like_floor_band(detection)
+    del x, cx, cy
+    # 표지판: 높이 > 너비 (수직), 적절한 크기, 바닥 띠 아님
+    return (
+        width >= 25
+        and height >= 50
+        and height >= width * 0.8
+        and aspect <= 4.0
+        and area <= MAX_PAD_TRACK_BLOB_AREA
+        and not _looks_like_floor_band(detection)
+    )
+
+
+def _looks_like_overhead_sign_blob(detection: Any) -> bool:
+    """표지판 형태: 화면 상단, 적절한 높이, 너무 넓지 않음."""
+    _, y, width, height, _, cy, area, aspect = _bbox_metrics(detection)
+    # 표지판은 대개 화면 상단 1/3에 위치, 높이 60~250px, 종횡비 0.4~3.0
+    return (
+        y <= 60
+        and cy <= 200
+        and 60 <= height <= 280
+        and 40 <= width <= 400
+        and 0.3 <= aspect <= 3.2
+        and area <= MAX_PAD_TRACK_BLOB_AREA
+    )
+
+
+def _looks_like_edge_scene_blob(detection: Any) -> bool:
+    x, _, width, _, cx, _, area, _ = _bbox_metrics(detection)
+    touches_left_edge = x <= 3 and width >= 280
+    touches_right_edge = x + width >= 1200 and width >= 280
+    return area >= 20000 and (touches_left_edge or touches_right_edge or cx <= 90)
+
+
+def _looks_like_wide_low_scene_patch(detection: Any) -> bool:
+    _, y, width, height, _, cy, area, aspect = _bbox_metrics(detection)
+    return area >= 3000 and y >= 500 and cy >= 500 and width >= 140 and height <= 180 and aspect >= 3.0
 
 
 def _track_continuity_bonus(detection: Any, memory: AgentMemory, target_kind: str, target_color: str | None) -> float:
@@ -361,15 +493,84 @@ def _clear_nav_track(memory: AgentMemory) -> None:
     memory.nav_track_lost_steps = 0
 
 
+def _safe_exception_label(exc: Exception) -> str:
+    message = str(exc).encode("ascii", errors="replace").decode("ascii")
+    message = " ".join(message.split())
+    if len(message) > 160:
+        message = message[:157] + "..."
+    return f"{type(exc).__name__}: {message}"
+
+
+def _sdk_call_failed(result: Any) -> bool:
+    if isinstance(result, dict):
+        status = str(result.get("status", "")).lower()
+        return bool(result.get("error")) or status in {"failed", "error", "timeout"}
+    error = getattr(result, "error", None)
+    status = str(getattr(result, "status", "")).lower()
+    return error is not None or status in {"failed", "error", "timeout"}
+
+
+def _looks_like_container_marker_blob(detection: Any) -> bool:
+    """Destination anchors should be colored letter signs, not floor/hand blobs."""
+    _, y, _, _, _, cy, area, _ = _bbox_metrics(detection)
+    if area < 2500:
+        return False
+    if _looks_like_held_cube_blob(detection) or _looks_like_floor_band(detection):
+        return False
+    if _looks_like_overhead_sign_blob(detection):
+        return True
+    return _looks_like_marker_blob(detection) and y <= 260 and cy <= 340
+
+
+def _is_plausible_pad_position(detection: Any) -> bool:
+    """패드 표지판이 있을 법한 화면 영역인지 확인 (상단 또는 중상단)."""
+    _, y, width, height, cx, cy, area, aspect = _bbox_metrics(detection)
+    del area
+    # 표지판은 대개 화면 상단 1/2에 위치
+    if cy >= 450:
+        return False
+    # 너무 넓으면 벽/장애물
+    if width >= 500:
+        return False
+    # 종횡비 극단적 제외
+    if aspect >= 5.0 or aspect <= 0.15:
+        return False
+    # 화면 중앙 근처
+    if cx <= 30 or cx >= 1170:
+        return False
+    # 적절한 크기
+    if height <= 15 or width <= 10:
+        return False
+    return True
+
+
 def _pad_candidates(detections: list[Any], target_color: str | None) -> list[Any]:
     candidates = [
         detection
         for detection in detections
         if (target_color is None or detection.color == target_color)
         and not _looks_like_held_cube_blob(detection)
+        and _looks_like_container_marker_blob(detection)
         and getattr(detection, "blob_area", 0) <= MAX_PAD_TRACK_BLOB_AREA
+        and _is_plausible_pad_position(detection)
     ]
     return sorted(candidates, key=lambda detection: detection.blob_area, reverse=True)
+
+
+def _is_plausible_cube_position(detection: Any) -> bool:
+    """큐브가 있을 법한 화면 영역인지 확인 (중앙, 하단, 적절한 거리)."""
+    _, y, width, height, cx, cy, area, aspect = _bbox_metrics(detection)
+    del height, area, aspect
+    # 화면 최상단(표지판 영역)은 제외
+    if y <= 30 and cy <= 120:
+        return False
+    # 너무 넓은 것은 벽/장애물
+    if width >= 350:
+        return False
+    # 화면 중앙 근처 (좌우 가장자리 제외)
+    if cx <= 80 or cx >= 1120:
+        return False
+    return True
 
 
 def _cube_candidates(detections: list[Any], memory: AgentMemory) -> list[Any]:
@@ -378,6 +579,13 @@ def _cube_candidates(detections: list[Any], memory: AgentMemory) -> list[Any]:
         for detection in detections
         if detection.color not in memory.skipped_colors
         and getattr(detection, "blob_area", 0) <= MAX_CUBE_BLOB_AREA
+        and getattr(detection, "blob_area", 0) >= 800  # 노이즈 제외
+        and not _looks_like_floor_band(detection)
+        and not _looks_like_container_marker_blob(detection)
+        and not _looks_like_overhead_sign_blob(detection)
+        and not _looks_like_edge_scene_blob(detection)
+        and not _looks_like_wide_low_scene_patch(detection)
+        and _is_plausible_cube_position(detection)
     ]
 
 
@@ -405,11 +613,21 @@ def _navigation_arrived(
     """Return true only when the target is close enough and centered enough."""
     arrival_area = PLACE_BLOB_AREA if target_kind == "pad" else PICK_BLOB_AREA
     centered_limit = PAD_CENTERED_DEG if target_kind == "pad" else CUBE_CENTERED_DEG
-    if area < arrival_area or abs(angle_deg) > centered_limit:
+    if abs(angle_deg) > centered_limit:
         return False
 
     if target_kind == "cube":
-        return moved_toward_target or area >= CUBE_IMMEDIATE_PICK_AREA
+        # 큐브가 충분히 가까우면 도달로 판단 (pick 가능 거리)
+        if area >= arrival_area:
+            return moved_toward_target or area >= CUBE_IMMEDIATE_PICK_AREA
+        # 처음 몇 스텝에서 가까우면 도달
+        if step <= 2 and area >= CUBE_PRECONTACT_PICK_AREA:
+            return True
+        # 전진하면서 접근 중이고 적절한 거리면 도달
+        return moved_toward_target and step >= 3 and area >= CUBE_APPROACH_PICK_AREA
+
+    if area < arrival_area:
+        return False
 
     return moved_toward_target and (
         pad_forward_steps >= 3
@@ -471,6 +689,12 @@ def choose_fast_decision(
             )
         pad_candidates = _pad_candidates(_visible_detections(observation), target_color)
         if not pad_candidates:
+            if target_color in memory.known_pad_bearings:
+                return AgentDecision(
+                    next_action="navigate_to_pad",
+                    target_color=target_color,
+                    reason="Fast local policy: matching pad bearing is mapped in memory.",
+                )
             return AgentDecision(
                 next_action="search_pad",
                 target_color=target_color,
@@ -537,6 +761,8 @@ async def set_head_cached(
         return {"status": "cached"}
 
     result = await set_head(ctx, yaw=yaw, pitch=pitch)
+    if _sdk_call_failed(result):
+        return result
     if yaw is not None:
         memory.head_yaw = yaw
     if pitch is not None:
@@ -606,6 +832,7 @@ def build_decision_context(
         "completed_colors": memory.completed_colors,
         "skipped_colors": memory.skipped_colors,
         "failed_attempts": memory.failed_attempts,
+        "known_pad_bearings": memory.known_pad_bearings,
         "recent_outcomes": memory.recent_outcomes[-5:],
         "last_result": last_result,
         "note": observation.note,
@@ -625,12 +852,13 @@ async def get_robot_status(ctx: Any, memory: AgentMemory | None = None) -> Any:
     try:
         status = await asyncio.wait_for(ctx.state("robot_status"), timeout=ROBOT_STATUS_TIMEOUT_S)
     except Exception as exc:
+        error_label = _safe_exception_label(exc)
         if memory is not None:
             memory.robot_status_failures += 1
             if memory.last_robot_status is not None:
-                print(f"[Status Warning] robot_status unavailable; reusing last status ({exc})")
+                print(f"[Status Warning] robot_status unavailable; reusing last status ({error_label})")
                 return memory.last_robot_status
-        print(f"[Status Warning] robot_status unavailable; using unknown fallback ({exc})")
+        print(f"[Status Warning] robot_status unavailable; using unknown fallback ({error_label})")
         return FallbackRobotStatus()
 
     if memory is not None:
@@ -639,9 +867,36 @@ async def get_robot_status(ctx: Any, memory: AgentMemory | None = None) -> Any:
     return status
 
 
+_POV_DEBUG_FRAME_COUNT = 0
+
+
+def _maybe_save_pov_frame(jpeg: bytes) -> None:
+    global _POV_DEBUG_FRAME_COUNT
+    if not SAVE_POV_FRAMES or POV_FRAME_LIMIT <= 0:
+        return
+
+    _POV_DEBUG_FRAME_COUNT += 1
+    if _POV_DEBUG_FRAME_COUNT > POV_FRAME_LIMIT:
+        return
+    if (_POV_DEBUG_FRAME_COUNT - 1) % POV_FRAME_EVERY != 0:
+        return
+
+    try:
+        os.makedirs(POV_FRAME_DIR, exist_ok=True)
+        frame_path = os.path.join(POV_FRAME_DIR, f"pov_{_POV_DEBUG_FRAME_COUNT:04d}.jpg")
+        with open(frame_path, "wb") as frame_file:
+            frame_file.write(jpeg)
+        if _POV_DEBUG_FRAME_COUNT <= 3 or _POV_DEBUG_FRAME_COUNT % 20 == 0:
+            print(f"[POV] saved {frame_path}")
+    except Exception as exc:
+        print(f"[POV Warning] failed to save frame: {_safe_exception_label(exc)}")
+
+
 async def get_camera_frame(ctx: Any) -> bytes:
     """POV camera frame을 가져옵니다."""
-    return await ctx.get_vision("pov")
+    jpeg = await ctx.get_vision("pov")
+    _maybe_save_pov_frame(jpeg)
+    return jpeg
 
 
 def build_signage_vlm_prompt(held_color: str | None = None) -> str:
@@ -710,7 +965,12 @@ async def set_head(ctx: Any, *, yaw: float | None = None, pitch: float | None = 
         args["yaw"] = yaw
     if pitch is not None:
         args["pitch"] = pitch
-    return await ctx.invoke("set_head", args, timeout_s=10)
+    try:
+        return await ctx.invoke("set_head", args, timeout_s=HEAD_RPC_TIMEOUT_S)
+    except Exception as exc:
+        error = _safe_exception_label(exc)
+        print(f"[Action Warning] set_head failed: {error}")
+        return {"status": "failed", "error": error}
 
 
 async def move_velocity(
@@ -722,11 +982,16 @@ async def move_velocity(
     duration_s: float = 1.0,
 ) -> Any:
     """짧은 body-frame velocity command를 보냅니다."""
-    return await ctx.invoke(
-        "set_velocity",
-        {"vx": vx, "vy": vy, "wz": wz, "duration_s": duration_s},
-        timeout_s=30,
-    )
+    try:
+        return await ctx.invoke(
+            "set_velocity",
+            {"vx": vx, "vy": vy, "wz": wz, "duration_s": duration_s},
+            timeout_s=MOVEMENT_RPC_TIMEOUT_S,
+        )
+    except Exception as exc:
+        error = _safe_exception_label(exc)
+        print(f"[Action Warning] set_velocity failed: {error}")
+        return {"status": "failed", "error": error}
 
 
 async def cancel_action(ctx: Any) -> Any:
@@ -736,20 +1001,36 @@ async def cancel_action(ctx: Any) -> Any:
 
 async def pick_nearest_cube(ctx: Any) -> Any:
     """의도한 cube 가까이 시각적으로 이동한 뒤 nearest cube를 집습니다."""
-    return await ctx.invoke(
-        "pick_entity",
-        {"target": {"kind": "entity", "entity_id": "cube"}},
-        timeout_s=300,
-    )
+    try:
+        return await ctx.invoke(
+            "pick_entity",
+            {"target": {"kind": "entity", "entity_id": "cube"}},
+            timeout_s=MANIPULATION_RPC_TIMEOUT_S,
+        )
+    except Exception as exc:
+        error = _safe_exception_label(exc)
+        print(f"[Action Warning] pick_entity failed: {error}")
+        return {"status": "failed", "error": error}
 
 
 async def place_nearest_zone(ctx: Any) -> Any:
     """matching pad 가까이 이동한 뒤 nearest zone에 내려놓습니다."""
-    return await ctx.invoke("place_entity", {}, timeout_s=300)
+    try:
+        return await ctx.invoke("place_entity", {}, timeout_s=MANIPULATION_RPC_TIMEOUT_S)
+    except Exception as exc:
+        error = _safe_exception_label(exc)
+        print(f"[Action Warning] place_entity failed: {error}")
+        return {"status": "failed", "error": error}
 
 
 def result_summary(result: Any) -> dict[str, Any]:
     """SDK result를 log에 넣기 쉬운 작은 dictionary로 변환합니다."""
+    if isinstance(result, dict):
+        return {
+            "status": str(result.get("status")) if result.get("status") is not None else None,
+            "error": result.get("error"),
+        }
+
     error = getattr(result, "error", None)
     status = getattr(result, "status", None)
     return {
@@ -789,6 +1070,57 @@ async def scan_head(
             print(f"[Scan] Early exit: found target {target_color} at yaw {yaw}")
             break
     return all_detections
+
+
+async def map_pad_by_scanning(
+    ctx: Any,
+    memory: AgentMemory,
+    target_color: str | None,
+    *,
+    pitch: float,
+) -> bool:
+    """Map pad/sign bearings without scene_state: scan, half-turn, then small exploration moves."""
+    if target_color and target_color in memory.known_pad_bearings:
+        return True
+
+    for phase in range(2):
+        scanned = await scan_head(
+            ctx,
+            yaws=(-0.75, 0.0, 0.75),
+            pitch=pitch,
+            target_color=target_color,
+        )
+        _remember_pad_bearings(memory, scanned)
+        if target_color and _select_target_detection(scanned, target_color, "pad", memory):
+            await set_head_cached(ctx, memory, yaw=0.0, pitch=pitch)
+            return True
+
+        if phase == 0:
+            print("[Map] Pad not found in front sweep; rotating half-turn and rescanning.")
+            move_result = await move_velocity(ctx, wz=0.8, duration_s=3.2)
+            if _sdk_call_failed(move_result):
+                await set_head_cached(ctx, memory, yaw=0.0, pitch=pitch)
+                return False
+
+    for step in range(2):
+        print(f"[Map] Pad still unseen; exploratory move {step + 1}/2.")
+        move_result = await move_velocity(ctx, vx=0.25, wz=0.2, duration_s=1.0)
+        if _sdk_call_failed(move_result):
+            await set_head_cached(ctx, memory, yaw=0.0, pitch=pitch)
+            return False
+        scanned = await scan_head(
+            ctx,
+            yaws=(-0.75, 0.0, 0.75),
+            pitch=pitch,
+            target_color=target_color,
+        )
+        _remember_pad_bearings(memory, scanned)
+        if target_color and _select_target_detection(scanned, target_color, "pad", memory):
+            await set_head_cached(ctx, memory, yaw=0.0, pitch=pitch)
+            return True
+
+    await set_head_cached(ctx, memory, yaw=0.0, pitch=pitch)
+    return bool(target_color and target_color in memory.known_pad_bearings)
 
 
 def call_llm_optimized(
@@ -1149,6 +1481,7 @@ async def observe_world(ctx: Any, memory: AgentMemory) -> Observation:
             color=d.color, angle_deg=d.angle_deg, blob_area=d.blob_area,
             centroid=d.centroid, bbox=d.bbox, head_yaw=0.0, head_pitch=pitch
         ))
+    _remember_pad_bearings(memory, detections)
 
     return Observation(robot_status=robot_status, detections=detections)
 
@@ -1230,9 +1563,13 @@ def update_memory(
         memory.pad_ready = False
         memory.stage = "need_pad"
     elif action == "pick_cube" and result.get("held"):
+        # 이미 들고 있었는데 또 집은 경우 방지
+        if memory.held_color is not None and memory.held_color != decision.target_color:
+            print(f"[State Warning] Already holding {memory.held_color}, pick_cube for {decision.target_color} ignored.")
         estimated_color = normalize_color(result.get("held_color_estimate"))
         if estimated_color and estimated_color != decision.target_color:
             print(f"[Vision] Corrected held color {decision.target_color} -> {estimated_color}")
+        # 실제로 새 큐브를 들었을 때만 held_color 업데이트
         memory.held_color = estimated_color or decision.target_color
         memory.active_color = memory.held_color
         memory.cube_ready = False
@@ -1304,9 +1641,24 @@ async def visual_search(
     # 머리는 정면에 고정하고, 몸체 회전으로만 빠른 360도 스캔 수행 (고개 흔들기 대기 제거)
     pitch = 0.02 if target_kind == "pad" else 0.15
     await set_head_cached(ctx, memory, yaw=0.0, pitch=pitch)
+    if target_kind == "pad" and target_color in memory.known_pad_bearings:
+        return True
     for attempt in range(12):
-        detections = await perceive(ctx)
+        raw_detections = await perceive(ctx)
+        detections = [
+            ScannedDetection(
+                color=d.color,
+                angle_deg=d.angle_deg,
+                blob_area=d.blob_area,
+                centroid=d.centroid,
+                bbox=d.bbox,
+                head_yaw=0.0,
+                head_pitch=pitch,
+            )
+            for d in raw_detections
+        ]
         if target_kind == "pad":
+            _remember_pad_bearings(memory, detections)
             detections = _pad_candidates(detections, target_color)
         else:
             detections = _cube_candidates(detections, memory)
@@ -1316,9 +1668,16 @@ async def visual_search(
         elif len(detections) > 0:
             return True
 
+        if target_kind == "pad" and attempt in {1, 5, 9}:
+            if await map_pad_by_scanning(ctx, memory, target_color, pitch=pitch):
+                return True
+
         print(f"Search attempt {attempt+1}: Turning body to search...")
         # 빠른 회전 속도와 짧은 동작 시간으로 대기 감소
-        await move_velocity(ctx, wz=0.6, duration_s=0.6)
+        sweep_turn = _known_pad_sweep_turn(memory, target_color, 0.6) if target_kind == "pad" else 0.6
+        move_result = await move_velocity(ctx, wz=sweep_turn, duration_s=0.6)
+        if _sdk_call_failed(move_result):
+            return False
     return False
 
 
@@ -1341,10 +1700,26 @@ async def visual_navigate_to_target(
     moved_toward_target = False
     pad_direction_confirmed = False
     pad_forward_steps = 0
+    last_cube_area: int | None = None
+    stagnant_cube_steps = 0
 
     max_steps = 10 if target_kind == "pad" else 20
     for step in range(1, max_steps + 1):
         obs_list = await perceive(ctx)
+        if target_kind == "pad":
+            mapped_observations = [
+                ScannedDetection(
+                    color=d.color,
+                    angle_deg=d.angle_deg,
+                    blob_area=d.blob_area,
+                    centroid=d.centroid,
+                    bbox=d.bbox,
+                    head_yaw=0.0,
+                    head_pitch=pitch,
+                )
+                for d in obs_list
+            ]
+            _remember_pad_bearings(memory, mapped_observations)
         target_det = _select_target_detection(obs_list, target_color, target_kind, memory)
 
         if not target_det:
@@ -1357,15 +1732,24 @@ async def visual_navigate_to_target(
                     direction = await get_vlm_pad_direction(ctx, target_color, api_key=api_key)
                 if direction == "left":
                     pad_direction_confirmed = True
-                    await move_velocity(ctx, wz=0.6, duration_s=0.8)
+                    move_result = await move_velocity(ctx, wz=0.6, duration_s=0.8)
+                    if _sdk_call_failed(move_result):
+                        _clear_nav_track(memory)
+                        return False
                     continue
                 if direction == "right":
                     pad_direction_confirmed = True
-                    await move_velocity(ctx, wz=-0.6, duration_s=0.8)
+                    move_result = await move_velocity(ctx, wz=-0.6, duration_s=0.8)
+                    if _sdk_call_failed(move_result):
+                        _clear_nav_track(memory)
+                        return False
                     continue
                 if direction == "center":
                     pad_direction_confirmed = True
-                    await move_velocity(ctx, vx=0.5, duration_s=1.0)
+                    move_result = await move_velocity(ctx, vx=0.5, duration_s=1.0)
+                    if _sdk_call_failed(move_result):
+                        _clear_nav_track(memory)
+                        return False
                     moved_toward_target = True
                     pad_forward_steps += 1
                     if pad_forward_steps >= 3:
@@ -1374,7 +1758,12 @@ async def visual_navigate_to_target(
                         return True
                     continue
             sweep_dir = 0.5 if step % 2 == 0 else -0.5
-            await move_velocity(ctx, wz=sweep_dir, duration_s=0.6)
+            if target_kind == "pad":
+                sweep_dir = _known_pad_sweep_turn(memory, target_color, sweep_dir)
+            move_result = await move_velocity(ctx, wz=sweep_dir, duration_s=0.6)
+            if _sdk_call_failed(move_result):
+                _clear_nav_track(memory)
+                return False
             continue
 
         area = target_det.blob_area
@@ -1404,33 +1793,60 @@ async def visual_navigate_to_target(
             _clear_nav_track(memory)
             return True
 
+        if target_kind == "cube":
+            if (
+                last_cube_area is not None
+                and moved_toward_target
+                and abs(area - last_cube_area) <= CUBE_STAGNANT_AREA_DELTA
+            ):
+                stagnant_cube_steps += 1
+            else:
+                stagnant_cube_steps = 0
+            last_cube_area = area
+
+            if stagnant_cube_steps >= CUBE_STAGNANT_STEP_LIMIT:
+                print(
+                    f"Cube approach stagnated on {target_color}; "
+                    "backing off and re-approaching from an angle."
+                )
+                # 후진하여 큐브를 밀지 않게 함
+                await move_velocity(ctx, vx=-0.3, duration_s=1.0)
+                # 좌우 중 하나로 회전하여 다른 각도에서 재접근
+                turn_dir = 0.5 if step % 2 == 1 else -0.5
+                await move_velocity(ctx, wz=turn_dir, duration_s=1.2)
+                _clear_nav_track(memory)
+                return False
+
+        if _navigation_arrived(
+            target_kind=target_kind,
+            area=area,
+            angle_deg=angle,
+            moved_toward_target=moved_toward_target,
+            pad_direction_confirmed=pad_direction_confirmed,
+            pad_forward_steps=pad_forward_steps,
+            step=step,
+        ):
+            print(f"Reached {target_color} target (area {area} >= {arrival_area})")
+            _clear_nav_track(memory)
+            return True
+
         # P-제어기를 통한 비례 조향 각속도 및 거리 기반 적응형 전진 속도/시간
         # pad 표지판은 화면 가장자리에 걸리기 쉬워 전진/횡이동/회전을 함께 써서 접근한다.
-        vy = 0.0
-        if abs(angle) > 8.0:
-            if target_kind == "pad":
-                wz = -0.3 if angle > 0 else 0.3
-                vy = -0.2 if angle > 0 else 0.2
-                vx = 0.2
-                duration = 0.6
-            else:
-                wz = -0.4 if angle > 0 else 0.4
-                vx = 0.0
-                duration = 0.6
-            print(
-                f"Nav step {step}: Centering target {target_color} "
-                f"(angle {angle:+.1f} deg, vx {vx:.2f}, vy {vy:.2f}, wz {wz:.2f})"
-            )
-        else:
-            wz = -angle * 0.02
-            if area < arrival_area * 0.4:
-                vx = 0.8
-                duration = 1.0
-            else:
-                vx = 0.4
-                duration = 0.6
+        vx, vy, wz, duration = _navigation_velocity_command(
+            target_kind=target_kind,
+            area=area,
+            angle=angle,
+            arrival_area=arrival_area,
+        )
+        print(
+            f"Nav step {step}: Servo command {target_color} "
+            f"(angle {angle:+.1f} deg, vx {vx:.2f}, vy {vy:.2f}, wz {wz:.2f})"
+        )
 
-        await move_velocity(ctx, vx=vx, vy=vy, wz=wz, duration_s=duration)
+        move_result = await move_velocity(ctx, vx=vx, vy=vy, wz=wz, duration_s=duration)
+        if _sdk_call_failed(move_result):
+            _clear_nav_track(memory)
+            return False
         if vx > 0:
             moved_toward_target = True
             if target_kind == "pad":
@@ -1443,10 +1859,25 @@ async def visual_navigate_to_target(
 async def recover_motion(ctx: Any, memory: AgentMemory, reason: str | None = None) -> dict[str, Any]:
     print(f"Recovering motion. Reason: {reason}")
     if reason and "fallen" in reason.lower():
-        await move_velocity(ctx, vx=0.0, wz=0.0, duration_s=2.0)
+        move_result = await move_velocity(ctx, vx=0.0, wz=0.0, duration_s=2.0)
+        if _sdk_call_failed(move_result):
+            return {"action": "recover", "status": "failed", "error": result_summary(move_result).get("error")}
+    elif memory.held_color is None:
+        move_result = await move_velocity(ctx, vx=-0.35, duration_s=0.9)
+        if _sdk_call_failed(move_result):
+            return {"action": "recover", "status": "failed", "error": result_summary(move_result).get("error")}
+        sidestep = 0.28 if memory.search_turns % 2 == 0 else -0.28
+        move_result = await move_velocity(ctx, vy=sidestep, wz=0.45, duration_s=1.0)
+        if _sdk_call_failed(move_result):
+            return {"action": "recover", "status": "failed", "error": result_summary(move_result).get("error")}
+        memory.search_turns += 1
     else:
-        await move_velocity(ctx, vx=-0.4, duration_s=1.2)
-        await move_velocity(ctx, wz=0.8, duration_s=1.5)
+        move_result = await move_velocity(ctx, vx=-0.4, duration_s=1.2)
+        if _sdk_call_failed(move_result):
+            return {"action": "recover", "status": "failed", "error": result_summary(move_result).get("error")}
+        move_result = await move_velocity(ctx, wz=0.8, duration_s=1.5)
+        if _sdk_call_failed(move_result):
+            return {"action": "recover", "status": "failed", "error": result_summary(move_result).get("error")}
     _clear_nav_track(memory)
     return {"action": "recover", "reason": reason, "status": "stepped_back_and_rotated"}
 

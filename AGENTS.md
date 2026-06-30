@@ -31,6 +31,26 @@ Work from 1 to 100:
 10. Never count a delivery unless the robot was holding an object before place and is
     not holding one after place.
 
+## Simulator Calibration Rule
+
+Level 2 success depends on simulator affordances as much as robotics logic. Treat these
+as measured facts, not guesses:
+
+- Record the observed bbox, centroid, blob area, angle, action result, and held-color
+  estimate for every live failure.
+- Convert each observed simulator failure into a small unit test before another live
+  attempt.
+- Tune constants from evidence: pickup readiness area/angle, pad placement readiness,
+  carried-cube appearance, floor strips, overhead signs, and large edge scene blobs.
+- `pick_entity` may pick the nearest physically reachable cube, not necessarily the
+  color that the planner intended. Always verify the held color after pick.
+- `place_entity` may report success/failure based on simulator proximity. Count a
+  delivery only after the robot was holding before place and is not holding after.
+- A target that is visually plausible but shaped like signage, a floor strip, or a
+  large scene edge must not unlock manipulation.
+- If a calibration changes behavior, add or update tests with the exact live bbox/area
+  values that motivated it.
+
 ## Chrome Control SOP
 
 Chrome is only for visual verification, not for solving robot control logic.
@@ -67,6 +87,8 @@ Rules:
 - A color blob alone does not identify a cube or a pad.
 - A blob from the carried cube must be filtered out during pad search.
 - Observation should be cheap and frequent.
+- Any head scan or navigation observation that sees a plausible pad/sign should update
+  the pad-bearing memory for that color.
 
 ### 2. Planner
 
@@ -106,6 +128,11 @@ Rules:
 - `navigate_to_pad` must not blindly follow the carried cube.
 - Navigation loops must be bounded.
 - A failed navigation must return quickly enough for recovery to decide next steps.
+- Pad search order is explicit: use remembered pad bearing if available; otherwise
+  scan left/front/right, rotate roughly 180 degrees and scan left/front/right again,
+  then perform small exploratory moves with rescans.
+- Exploration must still avoid Level 2 forbidden helpers: no `scene_state`, no exact
+  entity IDs, no `go_to`, and no hard-coded coordinates.
 
 ### 4. Manipulator
 
@@ -152,6 +179,12 @@ Rules:
   only be enabled with `MENLO_USE_VLM_HINTS=1`.
 - Carried cube blobs can look like large target-pad blobs.
 - Large pad/sign/scene blobs can be misclassified as cube candidates.
+- Wide floor strips, overhead signs, and large screen-edge blobs can look like cubes
+  unless cube detection filters use simulator-specific shape constraints.
+- `pick_entity` can grab a nearby cube of a different color if the visual target was
+  not a real reachable cube; held-color correction is required.
+- A carried cube can appear as a small centered low blob, not only as a large blob, and
+  must be filtered out during pad navigation.
 - Chrome extension control may hang on the Menlo viewer URL; use logs as the source
   of truth for join and action cadence when that happens.
 
@@ -162,7 +195,7 @@ Before live runs:
 ```powershell
 python -B -m py_compile menlo_runner\programs\project\ko\level_2_starter_ko.py
 python -m unittest discover -s tests -v
-git -c safe.directory=C:/Users/YEHYUN/Documents/GitHub/hansung-menlo-robotics-workshop diff --check -- menlo_runner/programs/project/ko/level_2_starter_ko.py
+git -c safe.directory=C:/Users/YEHYUN/Documents/GitHub/hansung-menlo-robotics-workshop diff --check -- menlo_runner/programs/project/ko/level_2_starter_ko.py tests/test_level_2_scenarios.py
 ```
 
 Live run gate:
