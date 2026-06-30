@@ -1,0 +1,105 @@
+
+2026 한성대 AI·SW 산학연계 해외연수
+Menlo Research 로봇 워크샵 준비 가이드
+1. 프로그램 개요
+기간: 2026.06.28(일) ~ 07.07(화), 8박 10일
+장소: 싱가포르, 말레이시아
+참가인원: 총 38명 (학생 32명, 교수 5명, 직원 1명)
+주요 활용 내용:
+Menlo Research 연계 산학연계 프로젝트 (AI Agent 개발)
+현대자동차 글로벌 혁신센터 싱가포르(HMGICS) 실습
+생성형 AI, Vision AI, Robotics 기술 활용
+글로벌 AI 기업 방문 (Grab, NUS, SUTD 등)
+2. Menlo Research 워크샵 상세
+워크샵 기간: 2026.06.29(월) ~ 07.06(월)
+도구: Menlo-robot-sdk, Mujoco Simulation, Virtual Asimov Robot
+워크샵 주제 (4개 세션)
+Workshop 1: SDK 기초, 뷰어, 로봇 상태, 장면 상태, 기본 동작
+Workshop 2: 인지(Perception) - 카메라 프레임, HSV 색상 블롭 탐지, 깊이 후크
+Workshop 3: 주행(Navigation) - 전역 상태 및 비전 기반 제어
+Workshop 4: 에이전트(Agents) - 도구 호출 LLM 에이전트
+워크샵 일정
+6/29(월): 프로젝트 주제 발표, 팀 내 역할 분담
+6/30(화), 7/1(수): 핵심 기능 개발
+7/2(목): 중간발표
+7/3(금), 7/4(토): 시스템 통합 및 개선
+7/5(일): 테스트 및 안정화
+7/6(월): 최종 발표 및 시상
+3. Asimov-1 휴머노이드 로봇 개요
+Asimov-1은 Menlo Research가 개발한 오픈소스 휴머노이드 로봇입니다.
+하드웨어 스펙
+키: 1.23m, 무게: 35kg
+자유도(DOF): 25개 구동 + 2개 수동 발가락
+이두근 중량: 양팔 각각 15kg
+배터리: 리튬이온 13S4P, 46.8V, 491Wh (약 2kg)
+뇌(연산): Pi 5 (미디어+네트워크) + Radxa CM5 (모션 제어)
+네트워크: 6개 CAN 버스 (5개 1Mbps + 1개 500kbps)
+센서 구성
+6-자유도 IMU: 몸통 내부 탑재
+25개 관절 인코더: 모든 액추에이터 내부
+2MP 모노 카메라: 머리 부분
+4채널 마이크 배열
+주의: 힘/토크 센서 및 촉각 센서 없음 (조작 제외)
+소프트웨어 아키텍처 (3개 루프)
+에이전트 루프: 언어+시각 입력 → 목표 출력 (~1Hz, 느림)
+주행 루프: 이동 경로점 → 발 디딜 위치 (수초~수분 단위)
+보행 루프: RL 정책 → 관절 토크 출력 (밀리초 단위, Radxa CM5 실시간)
+4. 사전 준비 체크리스트
+API 키 발급 (필수)
+MENLO_API_KEY: https://platform-auth.menlo.ai 에서 발급
+TOKAMAK_API_KEY: LLM/VLM 에이전트 예제용 (별도 안내 예정)
+저장소 및 도구
+GitHub 저장소: https://github.com/asimovinc/hansung-menlo-robotics-workshop
+이미 클론됨: /home/root2/dev/hansung-menlo-robotics-workshop/
+Python 환경
+menlo-robot-sdk는 Python 3.12+ 필요
+가상환경 생성됨: /home/root2/dev/menlo-workshop-venv/ (Python 3.12)
+JupyterLab 설치 완료
+시스템 사양 확인
+CPU: AMD Ryzen 7 7735HS (16코어)
+RAM: 16GB
+GPU: 없음 (Radeon Graphics 내장)
+메모리 여유 공간 확인 필요
+5. 한글 입력 및 Python 버전 주의사항 (중요!)
+이 시스템은 fcitx5 기반 한글 입력이 설정되어 있습니다.
+핵심 주의사항:
+python3 기본값은 3.10으로 유지되어야 함 (시스템 의존성)
+python3.12는 별도 설치되어 있으며 menlo-workshop-venv에서 사용
+python3 대안을 3.12로 변경하면 gnome-terminal 등이 작동하지 않음
+Alt_R 키로 한글 전환 (Ctrl+Space는 bash/readline과 충돌)
+가상환경 활성화 명령:
+source /home/root2/dev/menlo-workshop-venv/bin/activate
+6. 설치된 주요 패키지
+menlo-robot-sdk 0.2.2 (Menlo 로봇 SDK)
+menlo-robot-programs 0.1.0 (워크샵 실습 패키지)
+JupyterLab 4.6.0
+numpy, opencv-python, Pillow, requests, python-dotenv
+livekit (음성/비디오 통신)
+7. 워크샵 실행 방법
+옵션 A - Jupyter Notebook (권장):
+  1. source /home/root2/dev/menlo-workshop-venv/bin/activate
+  2. jupyter lab --ip=0.0.0.0 --port=8888
+  3. notebooks/student/ko/ 에서 한글 노트북 열기
+옵션 B - CLI 데모:
+  source /home/root2/dev/menlo-workshop-venv/bin/activate
+  python -m menlo_runner.cli basics-demo
+  python -m menlo_runner.cli perception-demo
+  python -m menlo_runner.cli navigation-demo
+  python -m menlo_runner.cli agent-demo
+8. 알아두어야 할 핵심 용어
+VLA (Vision-Language-Action) 모델: 시각+언어+행동을 하나로 통합한 모델
+RL (Reinforcement Learning): 강화학습, 보상 기반 학습
+Policy: 에이전트의 행동 전략 (네트워크로 표현)
+Degree of Freedom (DOF): 자유도, 로봇 관절의 독립 운동 축 수
+Actuator: 액추에이터, 관절을 구동하는 모터 장치
+IMU: 관성 측정 장치, 가속도+자이로스코프
+CAN 버스: 로봇 내부 장치 간 통신 프로토콜
+ReAct: Reasoning + Acting, LLM 에이전트 프레임워크
+Teleop: 원격 조종 (Teleoperation)
+Edge AI: 클라우드가 아닌 기기 자체에서 AI 처리
+9. 참고 자료
+Menlo Research 공식 사이트: https://menlo.ai
+Asimov-1 GitHub: https://github.com/asimovinc/asimov
+워크샵 자료 GitHub: https://github.com/asimovinc/hansung-menlo-robotics-workshop
+HMGICS: 현대자동차 글로벌 혁신센터 싱가포르
+문의: 한성대학교 SW중심대학사업단

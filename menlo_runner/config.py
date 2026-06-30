@@ -22,6 +22,11 @@ def _load_dotenv() -> None:
         from dotenv import load_dotenv
     except ImportError:
         return
+    # Search for .env from the repo root (this file is menlo_runner/config.py)
+    _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _env_path = os.path.join(_repo_root, ".env")
+    load_dotenv(dotenv_path=_env_path, override=False)
+    # Also try CWD as fallback
     load_dotenv(override=False)
 
 

@@ -123,7 +123,10 @@ async def open_robot_context(
     print("=" * 60)
     print(f"VIEWER URL: {ctx.viewer_url}")
     print("=" * 60)
-    input("Open the viewer URL in Chrome, wait for the warehouse to load, then press Enter...")
+    print("Open the viewer URL in Chrome, wait for the warehouse to load, then press Enter...")
+    import time
+    time.sleep(5)
+    print("Auto-proceeding after 5 seconds...")
     skills = await ctx.wait_for_skills()
     print("Skills found:")
     for skill in skills:
