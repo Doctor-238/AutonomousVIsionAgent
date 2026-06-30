@@ -518,7 +518,7 @@ class Level2ScenarioTest(unittest.TestCase):
         )
         self.assertTrue(arrived)
 
-    def test_cube_arrival_allows_precontact_pick_before_pushing(self):
+    def test_cube_arrival_rejects_initial_midsize_blob(self):
         arrived = _navigation_arrived(
             target_kind="cube",
             area=3505,
@@ -528,7 +528,7 @@ class Level2ScenarioTest(unittest.TestCase):
             pad_forward_steps=0,
             step=1,
         )
-        self.assertTrue(arrived)
+        self.assertFalse(arrived)
 
     def test_cube_servo_is_cautious_before_contact(self):
         vx, vy, wz, duration = _navigation_velocity_command(
@@ -584,10 +584,10 @@ class Level2ScenarioTest(unittest.TestCase):
             _should_peek_down("cube", area=3505, angle_deg=18.0, step=1)
         )
         self.assertTrue(
-            _should_peek_down("pad", area=7600, angle_deg=4.0, step=3)
+            _should_peek_down("pad", area=10500, angle_deg=4.0, step=3)
         )
         self.assertFalse(
-            _should_peek_down("pad", area=7600, angle_deg=4.0, step=1)
+            _should_peek_down("pad", area=10500, angle_deg=4.0, step=1)
         )
 
     def test_cube_arrival_requires_centered_target(self):
@@ -602,7 +602,7 @@ class Level2ScenarioTest(unittest.TestCase):
         )
         self.assertFalse(arrived)
 
-    def test_cube_arrival_allows_precontact_pick_before_pushing(self):
+    def test_cube_arrival_rejects_precontact_pick_before_pushing(self):
         arrived = _navigation_arrived(
             target_kind="cube",
             area=4100,
@@ -612,7 +612,7 @@ class Level2ScenarioTest(unittest.TestCase):
             pad_forward_steps=0,
             step=1,
         )
-        self.assertTrue(arrived)
+        self.assertFalse(arrived)
 
     def test_cube_arrival_rejects_small_precontact_blob(self):
         arrived = _navigation_arrived(
