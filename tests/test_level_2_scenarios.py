@@ -17,6 +17,7 @@ from menlo_runner.programs.project.ko.level_2_starter_ko import (
     _pad_candidates,
     _select_target_detection,
     choose_fast_decision,
+    get_robot_status,
     parse_task_instructions,
     update_memory,
     validate_decision,
@@ -30,6 +31,11 @@ class MockRobotState:
 class MockStatus:
     def __init__(self):
         self.robot = MockRobotState()
+
+
+class FailingStatusContext:
+    async def state(self, key):
+        raise TimeoutError(f"{key} unavailable")
 
 
 def detection(
@@ -236,6 +242,18 @@ class Level2ScenarioTest(unittest.TestCase):
         )
         self.assertEqual(memory.delivered_count, 0)
         self.assertIsNone(memory.held_color)
+
+    def test_robot_status_fallback_on_timeout(self):
+        memory = AgentMemory()
+        status = asyncio.run(get_robot_status(FailingStatusContext(), memory))
+        self.assertEqual(status.robot.held_entity_ids, [])
+        self.assertEqual(memory.robot_status_failures, 1)
+
+    def test_robot_status_reuses_last_known_status(self):
+        memory = AgentMemory(last_robot_status=MockStatus())
+        status = asyncio.run(get_robot_status(FailingStatusContext(), memory))
+        self.assertIs(status, memory.last_robot_status)
+        self.assertEqual(memory.robot_status_failures, 1)
 
     def test_cube_arrival_requires_centered_target(self):
         arrived = _navigation_arrived(

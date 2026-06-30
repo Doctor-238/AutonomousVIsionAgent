@@ -50,6 +50,7 @@ CUBE_IMMEDIATE_PICK_AREA = PICK_BLOB_AREA * 2.5
 HEAD_POSE_EPSILON = 0.01
 LLM_DECISION_TIMEOUT_S = 4
 LLM_DECISION_MAX_TOKENS = 160
+ROBOT_STATUS_TIMEOUT_S = 8.0
 MAX_FAILED_ATTEMPTS_PER_COLOR = 3
 RECENT_OUTCOME_LIMIT = 8
 USE_VLM_PAD_HINTS = os.environ.get("MENLO_USE_VLM_HINTS", "").lower() in {"1", "true", "yes"}
@@ -115,6 +116,8 @@ class AgentMemory:
     nav_track_color: str | None = None
     nav_track_angle: float | None = None
     nav_track_lost_steps: int = 0
+    last_robot_status: Any | None = None
+    robot_status_failures: int = 0
     search_turns: int = 0
     failed_attempts: dict[str, int] = field(default_factory=dict)
     completed_colors: list[str] = field(default_factory=list)
@@ -131,6 +134,24 @@ class Observation:
     detections: list[Any]
     note: str = ""
     vlm_summary: str = ""
+
+
+@dataclass
+class FallbackPose:
+    position: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
+    yaw_deg: float = 0.0
+
+
+@dataclass
+class FallbackRobot:
+    held_entity_ids: list[Any] = field(default_factory=list)
+    pose: FallbackPose = field(default_factory=FallbackPose)
+
+
+@dataclass
+class FallbackRobotStatus:
+    robot: FallbackRobot = field(default_factory=FallbackRobot)
+    unavailable: bool = True
 
 
 @dataclass(frozen=True)
@@ -599,9 +620,23 @@ def build_decision_context(
 # 이 wrapper에는 scene_state, 정답 좌표, 정확한 cube/pad entity ID, go_to를
 # 추가하지 마세요.
 
-async def get_robot_status(ctx: Any) -> Any:
+async def get_robot_status(ctx: Any, memory: AgentMemory | None = None) -> Any:
     """robot pose, motion status, neck state를 읽습니다."""
-    return await ctx.state("robot_status")
+    try:
+        status = await asyncio.wait_for(ctx.state("robot_status"), timeout=ROBOT_STATUS_TIMEOUT_S)
+    except Exception as exc:
+        if memory is not None:
+            memory.robot_status_failures += 1
+            if memory.last_robot_status is not None:
+                print(f"[Status Warning] robot_status unavailable; reusing last status ({exc})")
+                return memory.last_robot_status
+        print(f"[Status Warning] robot_status unavailable; using unknown fallback ({exc})")
+        return FallbackRobotStatus()
+
+    if memory is not None:
+        memory.last_robot_status = status
+        memory.robot_status_failures = 0
+    return status
 
 
 async def get_camera_frame(ctx: Any) -> bytes:
@@ -1103,7 +1138,7 @@ async def decide_next_action(
 # ---------------------------------------------------------------------------
 
 async def observe_world(ctx: Any, memory: AgentMemory) -> Observation:
-    robot_status = await get_robot_status(ctx)
+    robot_status = await get_robot_status(ctx, memory)
 
     # 머리를 정면으로 고정하고 즉시 촬영 (고개 흔드는 지연을 완전히 제거)
     pitch = 0.02 if memory.held_color else 0.15
@@ -1124,7 +1159,7 @@ async def verify_outcome(
     action_result: dict[str, Any],
     memory: AgentMemory,
 ) -> dict[str, Any]:
-    status = await get_robot_status(ctx)
+    status = await get_robot_status(ctx, memory)
     held = status.robot.held_entity_ids is not None and len(status.robot.held_entity_ids) > 0
     action_result["held"] = held
     if decision.next_action == "pick_cube" and held:
