@@ -47,7 +47,7 @@ DESTINATION_SIGN_RULES = {
 COLOR_ORDER = ("red", "green", "blue", "yellow")
 DEFAULT_DELIVERY_LIMIT = 6
 PICK_BLOB_AREA = 12000
-PLACE_BLOB_AREA = 12000
+PLACE_BLOB_AREA = 25000
 PAD_PEEK_AREA = 12000
 CUBE_PRECONTACT_PICK_AREA = 4000
 CUBE_APPROACH_PICK_AREA = 7000
@@ -55,8 +55,8 @@ CUBE_APPROACH_PICK_AREA = 7000
 MAX_CUBE_BLOB_AREA = 30000
 # 패드 인식은 근접 시 영역이 매우 커질 수 있으므로 한도 상향 (self-occlusion 필터가 따로 처리)
 MAX_PAD_TRACK_BLOB_AREA = 35000
-CUBE_CENTERED_DEG = 10.0
-PAD_CENTERED_DEG = 10.0
+CUBE_CENTERED_DEG = 4.0
+PAD_CENTERED_DEG = 5.0
 CUBE_IMMEDIATE_PICK_AREA = PICK_BLOB_AREA * 2.5
 CUBE_STAGNANT_AREA_DELTA = 250
 CUBE_STAGNANT_STEP_LIMIT = 3
@@ -299,10 +299,10 @@ def _looks_like_held_cube_blob(detection: Any) -> bool:
     del x
     small_center_hand_blob = (
         area >= 500
-        and y >= 285
-        and cy >= 320
-        and 520 <= cx <= 760
-        and 0.55 <= aspect <= 1.8
+        and y >= 220
+        and cy >= 300
+        and 500 <= cx <= 780
+        and 0.15 <= aspect <= 2.5
     )
     large_low_hand_blob = (
         area >= 8000
@@ -369,8 +369,14 @@ def _navigation_velocity_command(
             vy = -0.2 if angle > 0 else 0.2
             return 0.2, vy, wz, 0.6
         wz = -angle * 0.02
-        vx = 0.8 if area < arrival_area * 0.4 else 0.4
-        return vx, 0.0, wz, 1.0 if vx >= 0.8 else 0.6
+        if area > arrival_area * 0.6:
+            vx = 0.2
+        elif area > arrival_area * 0.3:
+            vx = 0.4
+        else:
+            vx = 0.8
+        duration = 1.0 if vx >= 0.8 else (0.8 if vx == 0.4 else 0.6)
+        return vx, 0.0, wz, duration
 
     if abs_angle > 16.0:
         wz = -0.4 if angle > 0 else 0.4
@@ -400,7 +406,7 @@ def _bbox_metrics(detection: Any) -> tuple[int, int, int, int, int, int, int, fl
 def _looks_like_floor_band(detection: Any) -> bool:
     """Long thin colored floor/edge strips are poor navigation anchors."""
     _, _, width, height, _, _, _, aspect = _bbox_metrics(detection)
-    return (width >= 360 and height <= 120 and aspect >= 5.0) or (width >= 700 and height <= 80)
+    return (aspect >= 3.5 and height <= 150) or (width >= 700 and height <= 80)
 
 
 def _looks_like_marker_blob(detection: Any) -> bool:
@@ -424,10 +430,10 @@ def _looks_like_overhead_sign_blob(detection: Any) -> bool:
     # 표지판은 대개 화면 상단 1/3에 위치, 높이 60~250px, 종횡비 0.4~3.0
     return (
         y <= 60
-        and cy <= 200
-        and 60 <= height <= 280
-        and 40 <= width <= 400
-        and 0.3 <= aspect <= 3.2
+        and cy <= 250
+        and 40 <= height <= 480
+        and 40 <= width <= 800
+        and 0.15 <= aspect <= 4.0
         and area <= MAX_PAD_TRACK_BLOB_AREA
     )
 
@@ -569,7 +575,7 @@ def _is_plausible_pad_position(detection: Any) -> bool:
     if width >= 500:
         return False
     # 종횡비 극단적 제외
-    if aspect >= 5.0 or aspect <= 0.15:
+    if aspect >= 6.0 or aspect <= 0.45:
         return False
     # 화면 중앙 근처
     if cx <= 30 or cx >= 1170:
@@ -588,6 +594,8 @@ def _pad_candidates(detections: list[Any], target_color: str | None) -> list[Any
         and not _looks_like_held_cube_blob(detection)
         and _looks_like_container_marker_blob(detection)
         and getattr(detection, "blob_area", 0) <= MAX_PAD_TRACK_BLOB_AREA
+        and not _looks_like_overhead_sign_blob(detection)
+        and not _looks_like_edge_scene_blob(detection)
         and _is_plausible_pad_position(detection)
     ]
     return sorted(candidates, key=lambda detection: detection.blob_area, reverse=True)
@@ -1695,25 +1703,31 @@ def update_memory(
         memory.cube_ready = False
         memory.pad_ready = False
         memory.stage = "need_pad"
-    elif action == "place_cube" and is_success and not result.get("held") and memory.held_color:
+    elif action == "place_cube" and is_success and result.get("held") is False and memory.held_color:
         if memory.held_color in memory.priority_colors:
             memory.delivered_count += 1
-            memory.completed_colors.append(memory.held_color)
+            # UNLIMITED DELIVERY: We do NOT add to completed_colors so we can keep picking red/blue.
         else:
             print(f"[Logic] Dumped unwanted {memory.held_color} cube.")
-            
+
         memory.held_color = None
         memory.active_color = None
         memory.cube_ready = False
         memory.pad_ready = False
         memory.stage = "need_cube"
         memory.failed_attempts.clear()
-    elif action == "place_cube" and not result.get("held"):
+        memory.skipped_colors.clear()
+    elif action == "place_cube" and result.get("held") is False:
         memory.held_color = None
         memory.active_color = None
         memory.cube_ready = False
         memory.pad_ready = False
         memory.stage = "need_cube"
+        memory.failed_attempts.clear()
+        memory.skipped_colors.clear()
+        
+    if memory.search_turns > 2:
+        memory.skipped_colors.clear()
     elif action == "recover":
         memory.cube_ready = False
         memory.pad_ready = False
@@ -2068,6 +2082,12 @@ async def visual_navigate_to_target(
                 stuck_steps = 0
                 
             if stuck_steps >= 3:
+                if abs(angle) < 20.0 and (
+                    (target_kind == "pad" and not _looks_like_overhead_sign_blob(target_det)) or
+                    (target_kind == "cube")
+                ):
+                    print(f"Nav step {step}: Stuck detected while facing real {target_kind}. Treating as arrived.")
+                    return True
                 print(f"Nav step {step}: Stuck detected! Distance moved: {dist:.3f}m. Executing avoidance maneuver.")
                 await move_velocity(ctx, vx=-0.3, wz=0.5, duration_s=1.5)
                 stuck_steps = 0
@@ -2179,7 +2199,14 @@ async def execute_decision(
         if not memory.pad_ready:
             return {"action": "place_cube", "status": "blocked", "error": "pad_navigation_required"}
         result = await place_nearest_zone(ctx)
-        return {"action": "place_cube", "result": result_summary(result)}
+        summary = result_summary(result)
+        # Check robot status explicitly after placing to verify if it is still held
+        import asyncio
+        await asyncio.sleep(0.5)
+        status = await get_robot_status(ctx, memory)
+        if status and hasattr(status, "held_entity"):
+            summary["held"] = bool(status.held_entity)
+        return {"action": "place_cube", "result": summary}
 
     if decision.next_action == "skip_target":
         return {"action": "skip_target", "status": "success"}
@@ -2256,6 +2283,15 @@ async def run_agent(
         verified = await verify_outcome(ctx, decision, action_result, memory)
         update_memory(memory, observation, decision, verified)
         last_result = verified
+        if tracker is not None:
+            reason = await tracker.stop_reason_from_scene(ctx)
+            if reason is not None:
+                tracker.mark_ended(reason)
+                print(f"Completion target reached after cycle action: {reason}.")
+                break
+
+    if tracker is not None:
+        await tracker.print_summary_from_scene(ctx)
 
     return memory
 
@@ -2264,14 +2300,17 @@ async def run(ctx: Any) -> None:
     task = get_task_instruction()
     print(task)
     print("Running Level 2 autonomous-vision project starter (Scored Simulation)")
-    memory = await run_agent(ctx, task=task, max_cycles=9999)
+    
+    completion = CompletionConfig(level=2, max_elapsed_s=600)
+    memory = await run_agent(ctx, task=task, max_cycles=10_000, completion=completion)
     print("\nRun complete.")
     print(f"Delivered count: {memory.delivered_count}")
     
-    # 큐브 개수 상한 제거 및 1개당 30점 부여
+    # 큐브 개수 제한 제거 됨 1개당 30점 부여
     score = memory.delivered_count * 30
     print(f"Final Score: {score} / Unlimited")
     
     print("Logs:")
+    import json
     for item in memory.logs:
-        print(item)
+        print(json.dumps(item, ensure_ascii=False))

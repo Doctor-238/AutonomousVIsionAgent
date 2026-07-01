@@ -1,0 +1,53 @@
+2026 AI·SW 산학연계 프로젝트 – LLM 기반 자율 로봇 에이전트 개발 프로젝트]
+6월 30일 프로젝트 변경 사항 및 과제 안내
+
+#1. 평가 기준 변경 사항
+
+엔지니어와 상의 후 프로젝트 평가 기준 일부를 변경하였습니다.
+- 점수 100점 상한 및 큐브 개수 6개 상한을 제거하였습니다.
+- 제한 시간 10분 내에 이동한 큐브 개수에 따라 점수를 누적합니다.
+  - Level 0: 큐브 1개당 10점
+  - Level 1: 큐브 1개당 20점
+  - Level 2: 큐브 1개당 30점
+- 미공개 추가 과제는 제거하였습니다. 기존 프로젝트 구현에 집중해주시면 됩니다.
+- 그 외 평가 기준은 업데이트된 프로젝트 소개 자료와 GitHub의 project instruction을 확인해주세요.
+
+
+#2. 스타터 코드 업데이트 및 작업 방식 안내
+
+변경된 평가 기준에 맞춰 스타터 파일이 업데이트되었습니다.
+- 프로젝트 과제 설명 문구가 수정되었습니다.
+- 10분 제한 시간과 점수를 측정할 수 있는 completion 모듈이 추가되었습니다.
+- 스타터 notebook과 Python starter 파일 모두 기본 실행 시 10분 scored simulation을 실행하도록 업데이트되었습니다.
+
+작업 환경별 안내는 다음과 같습니다.
+
+1) Google Drive / Colab notebook으로 작업하는 경우
+- Google Drive에는 업데이트된 notebook이 업로드되어 있습니다.
+- 공유된 Google Drive / Colab notebook을 viewer 권한으로 열어도 셀을 임시로 수정하고 실행할 수는 있습니다.
+- 다만 수정 내용은 원본 notebook에 저장되지 않으므로, 작업을 이어가려면 반드시 본인 Drive에 복사본을 만든 뒤 사용해주세요.
+- Colab에서는 첫 번째 setup cell을 실행해야 GitHub의 최신 `menlo_runner` 코드가 설치됩니다.
+
+2) 개인 IDE에서 clone한 repo의 starter notebook으로 작업하는 경우
+- GitHub repo를 최신 상태로 pull한 뒤 사용해주세요.
+- 로컬 IDE에서 `notebooks/project/` 아래 starter notebook을 열어 작업하면 됩니다.
+- 이 경우 notebook 파일을 직접 수정하는 것이므로 변경 내용은 로컬 `.ipynb` 파일에 저장됩니다.
+- 보통 setup cell을 실행하지 않아도 되지만, import 문제가 있으면 repo root에서 실행 중인지 또는 Python kernel 환경이 올바른지 확인해주세요.
+
+3) 개인 IDE에서 clone한 repo의 Python starter 파일로 작업하는 경우
+- GitHub repo를 최신 상태로 pull한 뒤 사용해주세요.
+- `menlo_runner/programs/project/` 아래의 starter `.py` 파일에서 TODO 부분을 구현하면 됩니다.
+- terminal 또는 IDE run configuration으로 대응되는 starter command를 실행할 수 있습니다.
+- Python starter도 notebook과 동일하게 기본적으로 10분 scored simulation을 실행합니다.
+
+각 방식에 따른 자세한 가이드는 GitHub README 한글/영문 문서를 참고해주세요.
+
+
+#3. 금일 일정 후 과제 안내
+- 오늘 일정 이후에는 팀별로 프로젝트를 이어서 진행해주시면 됩니다.
+
+
+#4. 참조 링크
+- GitHub: https://github.com/asimovinc/hansung-menlo-robotics-workshop
+- Google Drive: https://drive.google.com/drive/folders/19VK40mx8QFcLDItXhFW1FksCv31IKjGZ?usp=sharing
+- 프로젝트 소개 자료: https://drive.google.com/file/d/1KSYMx8HFBH8j2zvnp0wKM0fhsz1BVsKe/view?usp=sharing

@@ -81,6 +81,13 @@ class MockDetection:
         self.angle_deg = angle_deg
         self.bbox = bbox
 
+
+class MockDetection:
+    def __init__(self, blob_area, angle_deg, bbox=(0,0,100,100)):
+        self.blob_area = blob_area
+        self.angle_deg = angle_deg
+        self.bbox = bbox
+
 class Level2ScenarioTest(unittest.TestCase):
     def test_task_parsing_standard(self):
         task = "Find and sort the six cubes in the warehouse into their matching destination pads."
@@ -443,8 +450,69 @@ class Level2ScenarioTest(unittest.TestCase):
 
     def test_cube_arrival_requires_centered_target(self):
         arrived = _navigation_arrived(
+            target_det=type('MockDet', (), {'blob_area': 3000,
+            angle=2.0,
+            arrival_area=10000,
+        )
+        self.assertGreater(vx, 0.0)
+        self.assertLessEqual(vx, 0.55)
+        self.assertEqual(vy, 0.0)
+        self.assertLess(duration, 0.8)
+
+    def test_cube_servo_moves_forward_on_moderate_angle_error(self):
+        vx, vy, wz, duration = _navigation_velocity_command(
+            target_det=type('MockDet', (), {'blob_area': 6000,
+            angle=-8.8,
+            arrival_area=10000,
+        )
+        self.assertGreater(vx, 0.0)
+        self.assertEqual(vy, 0.0)
+        self.assertGreater(wz, 0.0)
+        self.assertLess(duration, 0.8)
+
+    def test_cube_servo_rotates_in_place_on_large_angle_error(self):
+        vx, vy, wz, duration = _navigation_velocity_command(
+            target_det=type('MockDet', (), {'blob_area': 6000,
+            angle=24.8,
+            arrival_area=10000,
+        )
+        self.assertEqual(vx, 0.0)
+        self.assertEqual(vy, 0.0)
+        self.assertLess(wz, 0.0)
+        self.assertLess(duration, 0.8)
+
+    def test_head_pitch_policy_looks_slightly_down_by_default(self):
+        cube_pitch = _head_pitch_for_target("cube")
+        pad_pitch = _head_pitch_for_target("pad", has_held=True)
+        close_cube_pitch = _head_pitch_for_target("cube", close=True)
+        held_pitch = _head_pitch_for_target("cube", held_color_check=True)
+
+        self.assertGreater(cube_pitch, pad_pitch)
+        self.assertGreater(close_cube_pitch, cube_pitch)
+        self.assertGreater(held_pitch, pad_pitch)
+
+    def test_close_target_triggers_temporary_lookdown_only_when_centered(self):
+        self.assertTrue(
+            _should_peek_down("cube", area=3505, 'angle_deg': -1.5, step=1)
+        )
+        self.assertFalse(
+            _should_peek_down("cube", area=3505, 'angle_deg': 18.0, step=1)
+        )
+        self.assertTrue(
+            _should_peek_down("pad", area=10500, 'angle_deg': 4.0, step=3)
+        )
+        self.assertFalse(
+            _should_peek_down("pad", area=10500, angle_deg=4.0, step=1)
+        )
+
+    def test_cube_arrival_requires_centered_target(self):
+        arrived = _navigation_arrived(
             target_kind="cube",
-        target_det=MockDetection(blob_area=21250, angle_deg=24.3),
+        target_det=MockDetection(blob_area=21250, angle_deg=-12.5), 'bbox': (0, 0, 100, 100)})(),
+        target_kind="cube",
+        target_det=MockDetection(blob_area=21250, angle_deg=24.3), 'bbox': (0, 0, 100, 100)})(),
+        target_kind="cube", 'bbox': (0, 0, 100, 100)})(),
+        target_kind="cube",
         moved_toward_target=False,
             pad_direction_confirmed=False,
             pad_forward_steps=0,
@@ -532,67 +600,6 @@ class Level2ScenarioTest(unittest.TestCase):
     def test_cube_servo_is_cautious_before_contact(self):
         vx, vy, wz, duration = _navigation_velocity_command(
             target_kind="cube",
-            area=3000,
-            angle=2.0,
-            arrival_area=10000,
-        )
-        self.assertGreater(vx, 0.0)
-        self.assertLessEqual(vx, 0.55)
-        self.assertEqual(vy, 0.0)
-        self.assertLess(duration, 0.8)
-
-    def test_cube_servo_moves_forward_on_moderate_angle_error(self):
-        vx, vy, wz, duration = _navigation_velocity_command(
-            target_kind="cube",
-            area=6000,
-            angle=-8.8,
-            arrival_area=10000,
-        )
-        self.assertGreater(vx, 0.0)
-        self.assertEqual(vy, 0.0)
-        self.assertGreater(wz, 0.0)
-        self.assertLess(duration, 0.8)
-
-    def test_cube_servo_rotates_in_place_on_large_angle_error(self):
-        vx, vy, wz, duration = _navigation_velocity_command(
-            target_kind="cube",
-            area=6000,
-            angle=24.8,
-            arrival_area=10000,
-        )
-        self.assertEqual(vx, 0.0)
-        self.assertEqual(vy, 0.0)
-        self.assertLess(wz, 0.0)
-        self.assertLess(duration, 0.8)
-
-    def test_head_pitch_policy_looks_slightly_down_by_default(self):
-        cube_pitch = _head_pitch_for_target("cube")
-        pad_pitch = _head_pitch_for_target("pad", has_held=True)
-        close_cube_pitch = _head_pitch_for_target("cube", close=True)
-        held_pitch = _head_pitch_for_target("cube", held_color_check=True)
-
-        self.assertGreater(cube_pitch, pad_pitch)
-        self.assertGreater(close_cube_pitch, cube_pitch)
-        self.assertGreater(held_pitch, pad_pitch)
-
-    def test_close_target_triggers_temporary_lookdown_only_when_centered(self):
-        self.assertTrue(
-            _should_peek_down("cube", area=3505, angle_deg=-1.5, step=1)
-        )
-        self.assertFalse(
-            _should_peek_down("cube", area=3505, angle_deg=18.0, step=1)
-        )
-        self.assertTrue(
-            _should_peek_down("pad", area=10500, angle_deg=4.0, step=3)
-        )
-        self.assertFalse(
-            _should_peek_down("pad", area=10500, angle_deg=4.0, step=1)
-        )
-
-    def test_cube_arrival_requires_centered_target(self):
-        arrived = _navigation_arrived(
-            target_kind="cube",
-        target_det=MockDetection(blob_area=21250, angle_deg=-12.5),
         moved_toward_target=True,
             pad_direction_confirmed=False,
             pad_forward_steps=0,
