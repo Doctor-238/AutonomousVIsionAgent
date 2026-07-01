@@ -74,6 +74,13 @@ def observation(*detections):
     return Observation(robot_status=MockStatus(), detections=list(detections))
 
 
+
+class MockDetection:
+    def __init__(self, blob_area, angle_deg, bbox=(0,0,100,100)):
+        self.blob_area = blob_area
+        self.angle_deg = angle_deg
+        self.bbox = bbox
+
 class Level2ScenarioTest(unittest.TestCase):
     def test_task_parsing_standard(self):
         task = "Find and sort the six cubes in the warehouse into their matching destination pads."
@@ -393,7 +400,7 @@ class Level2ScenarioTest(unittest.TestCase):
         self.assertEqual(selected, real_cube)
 
     def test_update_memory_counts_only_real_place_success(self):
-        memory = AgentMemory(held_color="red", pad_ready=True)
+        memory = AgentMemory(held_color="red", pad_ready=True, priority_colors=["red"])
         update_memory(
             memory,
             observation(),
@@ -437,9 +444,8 @@ class Level2ScenarioTest(unittest.TestCase):
     def test_cube_arrival_requires_centered_target(self):
         arrived = _navigation_arrived(
             target_kind="cube",
-            area=21250,
-            angle_deg=24.3,
-            moved_toward_target=False,
+        target_det=MockDetection(blob_area=21250, angle_deg=24.3),
+        moved_toward_target=False,
             pad_direction_confirmed=False,
             pad_forward_steps=0,
             step=1,
@@ -449,9 +455,8 @@ class Level2ScenarioTest(unittest.TestCase):
     def test_cube_arrival_allows_close_centered_target(self):
         arrived = _navigation_arrived(
             target_kind="cube",
-            area=34599,
-            angle_deg=-5.0,
-            moved_toward_target=False,
+        target_det=MockDetection(blob_area=34599, angle_deg=-5.0),
+        moved_toward_target=False,
             pad_direction_confirmed=False,
             pad_forward_steps=0,
             step=1,
@@ -461,9 +466,8 @@ class Level2ScenarioTest(unittest.TestCase):
     def test_cube_arrival_allows_nearly_centered_close_target(self):
         arrived = _navigation_arrived(
             target_kind="cube",
-            area=45301,
-            angle_deg=-9.4,
-            moved_toward_target=False,
+        target_det=MockDetection(blob_area=45301, angle_deg=-9.4),
+        moved_toward_target=False,
             pad_direction_confirmed=False,
             pad_forward_steps=0,
             step=5,
@@ -473,9 +477,8 @@ class Level2ScenarioTest(unittest.TestCase):
     def test_pad_arrival_requires_centered_target(self):
         arrived = _navigation_arrived(
             target_kind="pad",
-            area=54438,
-            angle_deg=-25.1,
-            moved_toward_target=True,
+        target_det=MockDetection(blob_area=54438, angle_deg=-25.1),
+        moved_toward_target=True,
             pad_direction_confirmed=False,
             pad_forward_steps=4,
             step=10,
@@ -485,9 +488,8 @@ class Level2ScenarioTest(unittest.TestCase):
     def test_pad_arrival_allows_centered_after_forward_motion(self):
         arrived = _navigation_arrived(
             target_kind="pad",
-            area=26047,
-            angle_deg=-5.3,
-            moved_toward_target=True,
+        target_det=MockDetection(blob_area=26047, angle_deg=-5.3),
+        moved_toward_target=True,
             pad_direction_confirmed=False,
             pad_forward_steps=4,
             step=10,
@@ -497,9 +499,8 @@ class Level2ScenarioTest(unittest.TestCase):
     def test_pad_arrival_allows_small_centered_sign_after_forward_motion(self):
         arrived = _navigation_arrived(
             target_kind="pad",
-            area=5370,
-            angle_deg=-5.8,
-            moved_toward_target=True,
+        target_det=MockDetection(blob_area=5370, angle_deg=-5.8),
+        moved_toward_target=True,
             pad_direction_confirmed=False,
             pad_forward_steps=3,
             step=7,
@@ -509,9 +510,8 @@ class Level2ScenarioTest(unittest.TestCase):
     def test_cube_arrival_allows_sim_pickup_distance_after_approach(self):
         arrived = _navigation_arrived(
             target_kind="cube",
-            area=5706,
-            angle_deg=-8.4,
-            moved_toward_target=True,
+        target_det=MockDetection(blob_area=5706, angle_deg=-8.4),
+        moved_toward_target=True,
             pad_direction_confirmed=False,
             pad_forward_steps=0,
             step=9,
@@ -521,9 +521,8 @@ class Level2ScenarioTest(unittest.TestCase):
     def test_cube_arrival_rejects_initial_midsize_blob(self):
         arrived = _navigation_arrived(
             target_kind="cube",
-            area=3505,
-            angle_deg=-1.5,
-            moved_toward_target=False,
+        target_det=MockDetection(blob_area=3505, angle_deg=-1.5),
+        moved_toward_target=False,
             pad_direction_confirmed=False,
             pad_forward_steps=0,
             step=1,
@@ -593,9 +592,8 @@ class Level2ScenarioTest(unittest.TestCase):
     def test_cube_arrival_requires_centered_target(self):
         arrived = _navigation_arrived(
             target_kind="cube",
-            area=21250,
-            angle_deg=-12.5,
-            moved_toward_target=True,
+        target_det=MockDetection(blob_area=21250, angle_deg=-12.5),
+        moved_toward_target=True,
             pad_direction_confirmed=False,
             pad_forward_steps=0,
             step=4,
@@ -605,9 +603,8 @@ class Level2ScenarioTest(unittest.TestCase):
     def test_cube_arrival_rejects_precontact_pick_before_pushing(self):
         arrived = _navigation_arrived(
             target_kind="cube",
-            area=4100,
-            angle_deg=-1.5,
-            moved_toward_target=True,
+        target_det=MockDetection(blob_area=4100, angle_deg=-1.5),
+        moved_toward_target=True,
             pad_direction_confirmed=False,
             pad_forward_steps=0,
             step=1,
@@ -617,9 +614,8 @@ class Level2ScenarioTest(unittest.TestCase):
     def test_cube_arrival_rejects_small_precontact_blob(self):
         arrived = _navigation_arrived(
             target_kind="cube",
-            area=2500,
-            angle_deg=-1.5,
-            moved_toward_target=True,
+        target_det=MockDetection(blob_area=2500, angle_deg=-1.5),
+        moved_toward_target=True,
             pad_direction_confirmed=False,
             pad_forward_steps=0,
             step=1,
@@ -629,9 +625,8 @@ class Level2ScenarioTest(unittest.TestCase):
     def test_cube_arrival_allows_large_close_look_before_pushing(self):
         arrived = _navigation_arrived(
             target_kind="cube",
-            area=11278,
-            angle_deg=-1.8,
-            moved_toward_target=False,
+        target_det=MockDetection(blob_area=11278, angle_deg=-1.8),
+        moved_toward_target=False,
             pad_direction_confirmed=False,
             pad_forward_steps=0,
             step=1,

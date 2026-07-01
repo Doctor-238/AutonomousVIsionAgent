@@ -12,7 +12,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class MenloConfig:
     menlo_api_key: str
-    tokamak_api_key: str
+    openrouter_api_key: str
     rcs_url: str = "https://api.menlo.ai/rcs"
     viewer_base_url: str = "https://sim.menlo.ai"
 
@@ -36,7 +36,7 @@ def load_config(require_tokamak: bool = False) -> MenloConfig:
 
     config = MenloConfig(
         menlo_api_key=os.environ.get("MENLO_API_KEY", ""),
-        tokamak_api_key=os.environ.get("TOKAMAK_API_KEY", ""),
+        openrouter_api_key=os.environ.get("OPENROUTER_API_KEY", os.environ.get("ANTHROPIC_AUTH_TOKEN", "")),
         rcs_url=os.environ.get("MENLO_RCS_URL", "https://api.menlo.ai/rcs"),
         viewer_base_url=os.environ.get("MENLO_VIEWER_BASE_URL", "https://sim.menlo.ai"),
     )
@@ -45,9 +45,9 @@ def load_config(require_tokamak: bool = False) -> MenloConfig:
         raise RuntimeError(
             "MENLO_API_KEY is not set. Add it to .env or export it in your shell."
         )
-    if require_tokamak and not config.tokamak_api_key:
+    if require_tokamak and not config.openrouter_api_key:
         raise RuntimeError(
-            "TOKAMAK_API_KEY is required for this program. Add it to .env or export it."
+            "OPENROUTER_API_KEY is required for this program. Add it to .env or export it."
         )
     return config
 

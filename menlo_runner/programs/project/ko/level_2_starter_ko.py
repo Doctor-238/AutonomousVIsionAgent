@@ -46,11 +46,11 @@ DESTINATION_SIGN_RULES = {
 }
 COLOR_ORDER = ("red", "green", "blue", "yellow")
 DEFAULT_DELIVERY_LIMIT = 6
-PICK_BLOB_AREA = 10000
-PLACE_BLOB_AREA = 3500
-PAD_PEEK_AREA = 10000
-CUBE_PRECONTACT_PICK_AREA = 3200
-CUBE_APPROACH_PICK_AREA = 5000
+PICK_BLOB_AREA = 12000
+PLACE_BLOB_AREA = 12000
+PAD_PEEK_AREA = 12000
+CUBE_PRECONTACT_PICK_AREA = 4000
+CUBE_APPROACH_PICK_AREA = 7000
 # 큐브 자체는 대개 5000~25000 px, 그 이상은 벽/바닥 패치 가능성 높음
 MAX_CUBE_BLOB_AREA = 30000
 # 패드 인식은 근접 시 영역이 매우 커질 수 있으므로 한도 상향 (self-occlusion 필터가 따로 처리)
@@ -61,10 +61,10 @@ CUBE_IMMEDIATE_PICK_AREA = PICK_BLOB_AREA * 2.5
 CUBE_STAGNANT_AREA_DELTA = 250
 CUBE_STAGNANT_STEP_LIMIT = 3
 HEAD_POSE_EPSILON = 0.01
-CUBE_NAV_PITCH = 0.18
-PAD_NAV_PITCH = 0.06
-CLOSE_CUBE_PITCH = 0.30
-CLOSE_PAD_PITCH = 0.16
+CUBE_NAV_PITCH = 0.30
+PAD_NAV_PITCH = 0.15
+CLOSE_CUBE_PITCH = 0.45
+CLOSE_PAD_PITCH = 0.30
 HELD_COLOR_PITCH = 0.22
 LLM_DECISION_TIMEOUT_S = 4
 LLM_DECISION_MAX_TOKENS = 160
@@ -639,14 +639,15 @@ def estimate_held_color_from_detections(detections: list[Any]) -> str | None:
 def _navigation_arrived(
     *,
     target_kind: str,
-    area: int,
-    angle_deg: float,
+    target_det: Any,
     moved_toward_target: bool,
     pad_direction_confirmed: bool,
     pad_forward_steps: int,
     step: int,
 ) -> bool:
     """Return true only when the target is close enough and centered enough."""
+    area = getattr(target_det, "blob_area", 0)
+    angle_deg = getattr(target_det, "angle_deg", 0.0)
     arrival_area = PLACE_BLOB_AREA if target_kind == "pad" else PICK_BLOB_AREA
     centered_limit = PAD_CENTERED_DEG if target_kind == "pad" else CUBE_CENTERED_DEG
     if abs(angle_deg) > centered_limit:
@@ -1208,8 +1209,8 @@ async def map_pad_by_scanning(
             return True
 
         if phase == 0:
-            print("[Map] Pad not found in front sweep; rotating half-turn and rescanning.")
-            move_result = await move_velocity(ctx, wz=0.8, duration_s=3.2)
+            print("[Map] Pad not found in front sweep; rotating roughly 90 degrees and rescanning.")
+            move_result = await move_velocity(ctx, wz=0.8, duration_s=1.6)
             if _sdk_call_failed(move_result):
                 await set_head_cached(ctx, memory, yaw=0.0, pitch=pitch)
                 return False
@@ -1412,10 +1413,15 @@ async def parse_task_instructions(task: str, api_key: str) -> tuple[int | None, 
             normalized = normalize_color(color)
             if normalized and normalized not in priorities:
                 priorities.append(normalized)
-        return data.get("delivery_limit"), priorities
+        skipped = []
+        for color in data.get("skipped_colors", []):
+            normalized = normalize_color(color)
+            if normalized and normalized not in skipped:
+                skipped.append(normalized)
+        return data.get("delivery_limit"), priorities, skipped
     except Exception as e:
         print(f"Task parser error: {e}")
-        return None, []
+        return None, [], []
 
 
 def validate_decision(decision: AgentDecision, memory: AgentMemory) -> AgentDecision:
@@ -1484,7 +1490,7 @@ def validate_decision(decision: AgentDecision, memory: AgentMemory) -> AgentDeci
         )
 
     # 5. 이미 완료(completed)되었거나 스킵(skipped)된 색상을 타겟팅하면 다른 색상으로 재유도
-    if decision.target_color in memory.skipped_colors:
+    if decision.target_color in memory.skipped_colors or decision.target_color in memory.completed_colors:
         if action in ("search_cube", "navigate_to_cube"):
             print(f"[Validation Warning] Color {decision.target_color} is completed/skipped. Overriding target_color to None.")
             decision.target_color = None
@@ -1758,7 +1764,7 @@ async def visual_search(
     target_kind: str = "cube",
 ) -> bool:
     # 머리는 정면에 고정하고, 몸체 회전으로만 빠른 360도 스캔 수행 (고개 흔들기 대기 제거)
-    pitch = 0.02 if target_kind == "pad" else 0.15
+    pitch = 0.15 if target_kind == "pad" else 0.30
     await set_head_cached(ctx, memory, yaw=0.0, pitch=pitch)
     if target_kind == "pad" and target_color in memory.known_pad_bearings:
         return True
@@ -1944,8 +1950,7 @@ async def visual_navigate_to_target(
 
         if _navigation_arrived(
             target_kind=target_kind,
-            area=area,
-            angle_deg=angle,
+            target_det=target_det,
             moved_toward_target=moved_toward_target,
             pad_direction_confirmed=pad_direction_confirmed,
             pad_forward_steps=pad_forward_steps,
@@ -2040,8 +2045,7 @@ async def visual_navigate_to_target(
 
         if _navigation_arrived(
             target_kind=target_kind,
-            area=area,
-            angle_deg=angle,
+            target_det=target_det,
             moved_toward_target=moved_toward_target,
             pad_direction_confirmed=pad_direction_confirmed,
             pad_forward_steps=pad_forward_steps,

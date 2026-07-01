@@ -11,30 +11,35 @@ import re
 from typing import Any
 
 
-TOKAMAK_URL = "https://api.tokamak.sh/v1/chat/completions"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
 def call_llm(
     messages: list[dict[str, Any]],
     *,
     api_key: str,
-    model: str = "minimaxai/minimax-m2.7",
+    model: str = "openrouter/free",
     timeout_s: int = 120,
 ) -> str:
+    """Synchronous call to the LLM backend (OpenRouter in this case)."""
     import requests
 
-    response = requests.post(
-        TOKAMAK_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={"model": model, "messages": messages},
-        timeout=timeout_s,
-    )
-    response.raise_for_status()
-    data = response.json()
-    return data["choices"][0]["message"]["content"]
+    try:
+        resp = requests.post(
+            OPENROUTER_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={"model": model, "messages": messages},
+            timeout=timeout_s,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+    except Exception as e:
+        print(f"Error calling LLM: {e}")
+        return ""
 
 
 def ask_vlm(
@@ -42,16 +47,21 @@ def ask_vlm(
     prompt: str,
     *,
     api_key: str,
-    model: str = "qwen/qwen3.6-35b-a3b",
+    model: str = "openrouter/free",
 ) -> str:
+    """Send an image + prompt to a VLM on OpenRouter."""
+    import base64
+
     b64_image = base64.b64encode(jpeg_bytes).decode("utf-8")
-    image_url = f"data:image/jpeg;base64,{b64_image}"
     messages = [
         {
             "role": "user",
             "content": [
-                {"type": "image_url", "image_url": {"url": image_url}},
                 {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"},
+                },
             ],
         }
     ]

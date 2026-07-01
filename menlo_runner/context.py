@@ -68,7 +68,7 @@ class RobotContext:
         viewer_url = f"{config.viewer_base_url}/?key={room_key}"
         return cls(config, client, session, robot_id, viewer_url)
 
-    async def wait_for_skills(self, timeout_s: float = 180.0) -> list[Any]:
+    async def wait_for_skills(self, timeout_s: float = 600.0) -> list[Any]:
         """Poll until the browser viewer joins and exposes robot skills."""
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
