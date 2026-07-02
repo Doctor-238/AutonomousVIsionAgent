@@ -2,206 +2,147 @@
 
 ## Mission
 
-Build the Level 2 Menlo robot agent slowly and deterministically. Do not jump straight
-to live simulator runs. Every change must preserve the Level 2 constraints:
+Build and verify the Level 1 Menlo robot agent for maximum scored deliveries in
+the 10 minute benchmark.
+
+Level 1 rules:
 
 - Do not use `scene_state`.
-- Do not use exact cube/pad entity IDs.
-- Do not use `go_to`.
-- Use camera observation, `set_head`, `set_velocity`, `pick_entity`, `place_entity`,
-  `robot_status`, memory, and bounded recovery.
+- Do not use exact cube or pad entity IDs.
+- Do not use entity-target `go_to`.
+- Coordinate `go_to` is allowed only for coordinates estimated from camera
+  observations or coordinates recorded after the robot physically reached them.
+- Camera observations, `robot_status`, `set_head`, `set_velocity`,
+  coordinate `go_to`, `pick_entity`, `place_entity`, memory, and progress helpers
+  are allowed.
 
-The goal is not to make the robot appear busy. The goal is to move to a cube, pick it,
-move to the correct destination pad, place it, verify the result, then repeat until the
-task limit is complete.
+The scoring target is not "looks busy". The robot must pick a cube from the
+source conveyor area, identify the held color, move to the matching destination
+pad, place it, verify that the score increased, and repeat quickly.
 
 ## Working Rule
 
-Work from 1 to 100:
+Work from evidence, one failure at a time:
 
-1. Stop old live processes before changing behavior.
-2. Read the relevant code before editing.
-3. Make one small conceptual change at a time.
-4. Add or update tests for that concept.
-5. Run local syntax/tests.
-6. Only then run a live simulator test.
-7. During live tests, watch both logs and Chrome.
-8. If Chrome automation hangs, stop browser automation and use logs/local checks first.
-9. Never continue repeated live attempts without writing down the observed failure.
-10. Never count a delivery unless the robot was holding an object before place and is
-    not holding one after place.
+1. Stop old live robot processes before a live run.
+2. Read the relevant code and latest logs before editing behavior.
+3. Make each conceptual change testable.
+4. Add or update tests for the behavior being changed.
+5. Run the local syntax and unit gates before live testing.
+6. During live tests, watch both logs and Chrome.
+7. Save robot POV frames and Chrome screenshots when diagnosing behavior.
+8. Do not repeat live runs without naming the observed failure mode.
+9. Never count a delivery unless `place_entity` happened while holding a cube and
+   the delivered-count helper increased afterward.
+10. Keep unrelated dirty files untouched.
 
-## Simulator Calibration Rule
+## Level 1 Architecture
 
-Level 2 success depends on simulator affordances as much as robotics logic. Treat these
-as measured facts, not guesses:
+Treat the agent as a behavior tree:
 
-- Record the observed bbox, centroid, blob area, angle, action result, and held-color
-  estimate for every live failure.
-- Convert each observed simulator failure into a small unit test before another live
-  attempt.
-- Tune constants from evidence: pickup readiness area/angle, pad placement readiness,
-  carried-cube appearance, floor strips, overhead signs, and large edge scene blobs.
-- `pick_entity` may pick the nearest physically reachable cube, not necessarily the
-  color that the planner intended. Always verify the held color after pick.
-- `place_entity` may report success/failure based on simulator proximity. Count a
-  delivery only after the robot was holding before place and is not holding after.
-- A target that is visually plausible but shaped like signage, a floor strip, or a
-  large scene edge must not unlock manipulation.
-- If a calibration changes behavior, add or update tests with the exact live bbox/area
-  values that motivated it.
+```text
+warmup -> map_source -> pick_from_source -> classify_held
+       -> locate_pad -> navigate_pad -> place_verify -> return_source
+```
 
-## Chrome Control SOP
+The LLM is an advisory planner, not the real-time controller. The local policy
+must make fast decisions every cycle. LLM calls may help with recovery and
+priority updates, but they must be bounded by a short timeout and must not block
+normal action cadence.
 
-Chrome is only for visual verification, not for solving robot control logic.
+## Source Farming
 
-1. Start the robot process and wait for the viewer URL in the stdout log.
-2. Open the viewer URL in Chrome.
-3. Confirm the log reaches `Skills found`.
-4. Capture one screenshot only after the scene is visibly loaded.
-5. If Chrome extension control hangs on `goto`, do not keep retrying blindly.
-   Use OS-level Chrome open once, then verify via logs.
-6. If Chrome still does not join, stop the live robot process and diagnose separately.
-7. Do not run multiple live robot processes at once.
+The source conveyor is the production station.
 
-## Robot Agent Architecture
+- First find a reachable cube/source cluster from camera observations and record
+  the robot position after a successful pick as `source_anchor`.
+- Once the anchor is known, return to it instead of chasing every colored blob.
+- Near the anchor, prefer direct generic `pick_entity(cube)` because the simulator
+  can pick the nearest reachable conveyor cube.
+- If a direct source pick fails, do not repeat forever. Back up or sidestep
+  briefly, lower the head, rescan, then retry.
+- The planned color is only a hint. The held color returned by the progress
+  helper is authoritative; deliver whatever color was actually picked.
 
-The Level 2 agent should be treated as five cooperating modules:
+## Smart Pad Classifier
 
-### 1. Observer
+A destination pad is not just a colored blob.
 
-Inputs:
+- A valid pad candidate should look like a colored sign/target with white-letter
+  evidence or nearby wood/pallet evidence.
+- The A sign/conveyor area is not a destination.
+- Use fixed sign semantics only as interpretation:
+  B/red, C/green, D/blue, E/yellow.
+- Store `known_pad_xy` only from robot-status + camera-derived estimates.
+- Store `confirmed_pad_xy` only after a scored placement.
+- Store `rejected_pad_xy` after failed navigation or a placement that did not
+  increase the score.
+- If `robot_status` is unavailable, do not create or update coordinate memory.
 
-- POV camera frame
-- `robot_status`
-- memory
+## Topological Memory
 
-Outputs:
+Use a measured, partial map rather than fixed answer coordinates.
 
-- visible color detections
-- held/not-held state
-- low-confidence notes
+- Track `source_anchor`, `known_pad_xy`, `confirmed_pad_xy`, `rejected_pad_xy`,
+  recent failed target positions, and delivery outcomes.
+- Opportunistically remember other pad candidates seen during scans.
+- Search order for missing pads: left/front/right scan, rotate about 180 degrees,
+  left/front/right scan again, then perform small exploratory moves with rescans.
+- Rejected coordinates should decay only after better evidence, not immediately.
 
-Rules:
+## Navigation Supervisor
 
-- A color blob alone does not identify a cube or a pad.
-- A blob from the carried cube must be filtered out during pad search.
-- Observation should be cheap and frequent.
-- Any head scan or navigation observation that sees a plausible pad/sign should update
-  the pad-bearing memory for that color.
+Coordinate navigation is allowed, but it must be supervised.
 
-### 2. Planner
+- Before `go_to`, validate that the target coordinate came from observation or
+  recorded memory and is not near a rejected coordinate.
+- Do not navigate on fake fallback `(0, 0)` status.
+- If `go_to` times out, read `robot_status`; if the robot is already within the
+  target tolerance, treat it as reached.
+- Near a target, use only short, conservative `set_velocity` nudges. Do not drive
+  straight into walls, shelves, or container boards.
+- Keep the default head pitch slightly downward. Use a lower close-look pitch
+  immediately before pick or place.
+- Stop repeated actions if the robot is fallen.
 
-Inputs:
+## Visual Forensics
 
-- task text
-- observation
-- memory
-- last action result
+Live testing must produce enough evidence to debug like a video.
 
-Outputs:
+- Save annotated POV frames during scans and after actions when diagnostics are
+  enabled.
+- Capture Chrome viewer screenshots during live smoke tests.
+- Log for each action: duration, robot xy/yaw, held color, target kind, target xy,
+  bbox, centroid, area, bearing, pad letter score, pad wood score, raw delivered
+  count, and scored delta.
+- Classify failures as one of:
+  `rpc_ready`, `source_pick`, `wrong_pad`, `navigation`, `place_verify`, `fallen`.
+- Convert each repeated failure into a unit test or calibration fixture before
+  another live attempt.
 
-- one high-level action from the allowed Level 2 action set
+## Simulator Calibration
 
-Rules:
+Treat simulator affordances as measured facts.
 
-- Normal cadence must be local and fast.
-- LLM may parse task variants or help recovery, but must not block every action.
-- The planner must enforce the sequence:
-  `search_cube -> navigate_to_cube -> pick_cube -> search_pad -> navigate_to_pad -> place_cube`.
-
-### 3. Navigator
-
-Inputs:
-
-- target kind: `cube` or `pad`
-- target color
-- current detections
-
-Outputs:
-
-- reached true/false
-
-Rules:
-
-- `navigate_to_cube` may follow cube-colored blobs.
-- `navigate_to_pad` must not blindly follow the carried cube.
-- Navigation loops must be bounded.
-- A failed navigation must return quickly enough for recovery to decide next steps.
-- Pad search order is explicit: use remembered pad bearing if available; otherwise
-  scan left/front/right, rotate roughly 180 degrees and scan left/front/right again,
-  then perform small exploratory moves with rescans.
-- Exploration must still avoid Level 2 forbidden helpers: no `scene_state`, no exact
-  entity IDs, no `go_to`, and no hard-coded coordinates.
-
-### 4. Manipulator
-
-Inputs:
-
-- validated action
-- memory readiness flags
-
-Outputs:
-
-- pick/place result summary
-
-Rules:
-
-- `pick_entity` is allowed only after successful cube navigation.
-- `place_entity` is allowed only after successful pad navigation.
-- Direct `pick -> place` loops are invalid.
-
-### 5. Verifier and Memory
-
-Inputs:
-
-- action result
-- `robot_status`
-- optional post-action POV observation
-
-Outputs:
-
-- updated memory
-- recent outcome log
-
-Rules:
-
-- Pick success means held state became true.
-- Place success means held state became false after a valid held object existed.
-- Do not increment delivery count on `place_entity` errors.
-- Track repeated failures by target color and action kind.
-
-## Current Known Failure Modes
-
-- Tokamak text model can return only `reasoning_content` with `finish=length`; this
-  must not block normal action cadence.
-- Tokamak VLM can also return no `content`; VLM hints are off by default and should
-  only be enabled with `MENLO_USE_VLM_HINTS=1`.
-- Carried cube blobs can look like large target-pad blobs.
-- Large pad/sign/scene blobs can be misclassified as cube candidates.
-- Wide floor strips, overhead signs, and large screen-edge blobs can look like cubes
-  unless cube detection filters use simulator-specific shape constraints.
-- `pick_entity` can grab a nearby cube of a different color if the visual target was
-  not a real reachable cube; held-color correction is required.
-- A carried cube can appear as a small centered low blob, not only as a large blob, and
-  must be filtered out during pad navigation.
-- Chrome extension control may hang on the Menlo viewer URL; use logs as the source
-  of truth for join and action cadence when that happens.
+- Tune pickup radius, source revisit radius, placement tolerance, pad feature
+  thresholds, target bbox ranges, and `go_to` arrival tolerance from logs.
+- Keep tuning values as constants or environment variables.
+- `set_sim_speed` is off by default for scored runs. Use it only behind an
+  explicit experiment flag.
 
 ## Test Gate
 
 Before live runs:
 
 ```powershell
-python -B -m py_compile menlo_runner\programs\project\ko\level_2_starter_ko.py
-python -m unittest discover -s tests -v
-git -c safe.directory=C:/Users/YEHYUN/Documents/GitHub/hansung-menlo-robotics-workshop diff --check -- menlo_runner/programs/project/ko/level_2_starter_ko.py tests/test_level_2_scenarios.py
+python -B -m py_compile menlo_runner\programs\project\ko\level_1_starter_ko.py tests\test_level_1_fast_policy.py
+python -m unittest tests.test_level_1_fast_policy -v
 ```
 
 Live run gate:
 
-- There must be no existing Python robot process from an older run.
-- The latest code must have passed the local test gate.
-- The live log must be saved under `outputs/level2_liveN_stdout.log` and
-  `outputs/level2_liveN_stderr.log`.
-- Stop after one live failure and write down the cause before changing code.
+- No old Python robot process is running.
+- The viewer URL is written to `run_logs/latest_level1_url.txt`.
+- Chrome opens that exact URL from the file, not manual copy/paste.
+- Logs and screenshots are saved under `run_logs/`.
+- Stop after a clear live failure, write down the cause, then patch and retest.

@@ -1,0 +1,43 @@
+Created robot: rb_019f1dc60fb87490b785e49bbab40e83
+============================================================
+VIEWER URL: https://sim.menlo.ai/?key=k1~d3NzOi8vbGl2ZWtpdC5tZW5sby5haQ~eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYW1lIjoiU2ltcGxlU2ltIFZpZXdlciAocmJfMDE5ZjFkYzYwZmI4NzQ5MGI3ODVlNDliYmFiNDBlODMpIiwidmlkZW8iOnsicm9vbUpvaW4iOnRydWUsInJvb20iOiJyYl8wMTlmMWRjNjBmYjg3NDkwYjc4NWU0OWJiYWI0MGU4MyIsImNhblB1Ymxpc2giOnRydWUsImNhblN1YnNjcmliZSI6dHJ1ZSwiY2FuUHVibGlzaERhdGEiOnRydWV9LCJzdWIiOiJzaW1wbGVzaW06cmJfMDE5ZjFkYzYwZmI4NzQ5MGI3ODVlNDliYmFiNDBlODMiLCJpc3MiOiJBUElwcm9kTGl2ZUtpdDIwMjQiLCJuYmYiOjE3ODI5MTA5NTEsImV4cCI6MTc4MjkyNTM1MX0.hlRHsIUUo94ATNqyurn4E48fWMi1qxqSyGmjtdUPMZs
+============================================================
+Open the viewer URL in Chrome, wait for the warehouse to load, then press Enter...
+Auto-proceeding after 5 seconds...
+Skills found:
+  - go_to
+  - set_velocity
+  - cancel
+  - pick_entity
+  - place_entity
+  - set_head
+  - set_sim_speed
+  - configure_benchmark
+  - set_color_mode
+  - select_scene
+Find and sort cubes from the source area into their matching destination pads.
+Level 1 fast coordinate-navigation agent 실행
+
+[Level 1] Cycle 1
+Completion timer started at first cycle (target cubes=any, time limit=600s, 20 points per delivery).
+[State Warning] robot_status unavailable: TimeoutError: runtime.state got no reply from rcw 'simplesim:rb_019f1dc60fb87490b785e49bbab40e83' within 30s (the action may still be running — raise timeout_s / connect(runtime_call_timeout_s=...) for long actions)
+[Target] cube color=green area=11776 centroid=(581, 679) bbox=(496, 634, 160, 86) bearing=-2.8 xy=(0.45,-0.02)
+Agent decision: AgentDecision(next_action='navigate_to_cube', target_color='green', reason='Local Level 1 policy: projected visible source/cube blob to world coordinate.', recovery_strategy=None)
+Action result (4.22s): {'action': 'navigate_to_cube', 'target_xy': (0.44946276180364536, -0.021982396408025965), 'target_color': 'green', 'ok': True, 'result': {'status': 'done', 'error': None}}
+[Progress] delivered_raw=5 scored_delta=0 held=None stage=ready_pick robot_xy=(0.6174202924882279, -0.1354588329508732)
+
+[Level 1] Cycle 2
+Agent decision: AgentDecision(next_action='pick_cube', target_color='green', reason='Local Level 1 policy: cube coordinate navigation succeeded.', recovery_strategy=None)
+Action result (0.35s): {'action': 'pick_cube', 'target_color': 'green', 'ok': True, 'result': {'status': 'done', 'error': None}}
+[Progress] delivered_raw=5 scored_delta=0 held=blue stage=need_pad robot_xy=(0.5887990642306871, -0.1286975732008653)
+
+[Level 1] Cycle 3
+[Target] pad color=blue area=18000 centroid=(1153, 264) bbox=(1058, 208, 222, 141) bearing=-1.8 xy=(0.59,0.72)
+Agent decision: AgentDecision(next_action='navigate_to_pad', target_color='blue', reason='Local Level 1 policy: holding cube; use remembered/scanned pad coordinate.', recovery_strategy=None)
+Action result (2.05s): {'action': 'navigate_to_pad', 'target_xy': (0.5895519277274897, 0.7214175181512815), 'nav_xy': (0.5895519277274897, 0.7214175181512815), 'partial': False, 'target_color': 'blue', 'ok': True, 'result': {'status': 'done', 'error': None}}
+[Progress] delivered_raw=5 scored_delta=0 held=blue stage=ready_place robot_xy=(0.6778506400104368, 0.6310277976135064)
+
+[Level 1] Cycle 4
+[Vision Warning] scan skipped yaw=-0.45: TimeoutError: runtime.tools_call got no reply from rcw 'simplesim:rb_019f1dc60fb87490b785e49bbab40e83' within 6s (the action may still be running — raise timeout_s / connect(runtime_call_timeout_s=...) for long actions)
+[Vision Warning] scan skipped yaw=0.00: TimeoutError: runtime.tools_call got no reply from rcw 'simplesim:rb_019f1dc60fb87490b785e49bbab40e83' within 6s (the action may still be running — raise timeout_s / connect(runtime_call_timeout_s=...) for long actions)
+[Vision Warning] scan skipped yaw=0.45: TimeoutError: 

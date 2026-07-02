@@ -1,0 +1,69 @@
+Created robot: rb_019f20c4cd3575c3bdb05e479da6cb53
+============================================================
+VIEWER URL: https://sim.menlo.ai/?key=k1~d3NzOi8vbGl2ZWtpdC5tZW5sby5haQ~eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYW1lIjoiU2ltcGxlU2ltIFZpZXdlciAocmJfMDE5ZjIwYzRjZDM1NzVjM2JkYjA1ZTQ3OWRhNmNiNTMpIiwidmlkZW8iOnsicm9vbUpvaW4iOnRydWUsInJvb20iOiJyYl8wMTlmMjBjNGNkMzU3NWMzYmRiMDVlNDc5ZGE2Y2I1MyIsImNhblB1Ymxpc2giOnRydWUsImNhblN1YnNjcmliZSI6dHJ1ZSwiY2FuUHVibGlzaERhdGEiOnRydWV9LCJzdWIiOiJzaW1wbGVzaW06cmJfMDE5ZjIwYzRjZDM1NzVjM2JkYjA1ZTQ3OWRhNmNiNTMiLCJpc3MiOiJBUElwcm9kTGl2ZUtpdDIwMjQiLCJuYmYiOjE3ODI5NjEyMDAsImV4cCI6MTc4Mjk3NTYwMH0.GWyag_-8j_YJ4hHhnH_8d0sSxbyArOGom3PW3PGoaHk
+============================================================
+Open the viewer URL in Chrome, wait for the warehouse to load, then press Enter...
+Auto-proceeding after 5 seconds...
+Skills found:
+  - go_to
+  - set_velocity
+  - cancel
+  - pick_entity
+  - place_entity
+  - set_head
+  - set_sim_speed
+  - configure_benchmark
+  - set_color_mode
+  - select_scene
+Find and sort cubes from the source area into their matching destination pads.
+Level 1 fast coordinate-navigation agent 실행
+[Viewer] wrote run_logs/latest_level1_url.txt
+[Warmup] runtime ready attempt=1 robot_xy=(0.4056455338355274, -1.4970550427901776)
+
+[Level 1] Cycle 1
+Completion timer started at first cycle (target cubes=any, time limit=600s, 20 points per delivery).
+Agent decision: AgentDecision(next_action='pick_cube', target_color=None, reason='Local Level 1 policy: close conveyor cubes are visible; try source farming pick before slow coordinate navigation.', recovery_strategy=None)
+Action result (0.77s): {'action': 'pick_cube', 'target_color': None, 'ok': True, 'result': {'status': 'done', 'error': None}, 'duration_s': 0.767}
+[Progress] delivered_raw=5 scored_delta=0 held=green stage=need_pad robot_xy=(0.40625695960213376, -1.4971537994943633)
+
+[Level 1] Cycle 2
+[Target] pad color=green area=8032 centroid=(83, 352) bbox=(38, 307, 93, 92) bearing=-26.1 letter=0.089 wood=0.143 xy=(1.17,-1.87)
+[Target] pad color=blue area=9005 centroid=(1139, 387) bbox=(1060, 337, 145, 107) bearing=23.4 letter=0.002 wood=0.036 xy=(2.09,-0.76)
+Agent decision: AgentDecision(next_action='navigate_to_pad', target_color='green', reason='Local Level 1 policy: holding cube; use remembered/scanned pad coordinate.', recovery_strategy=None)
+Action result (2.78s): {'action': 'navigate_to_pad', 'ok': True, 'target_xy': (1.1716171538371714, -1.8670035467930823), 'robot_xy': (1.0580678091171623, -1.8399685966325243), 'robot_z': 0.6185965861825592, 'reached_by_position': True, 'corrected_by_position': False, 'blocked_by_stuck': False, 'tolerance_m': 0.85, 'duration_s': 2.779, 'result': {'status': 'done', 'error': None}, 'error': None, 'status_warning': None, 'nav_xy': (1.1716171538371714, -1.8670035467930823), 'partial': False, 'target_color': 'green'}
+[Progress] delivered_raw=5 scored_delta=0 held=green stage=ready_place robot_xy=(1.072766842225099, -1.8535891844113652)
+
+[Level 1] Cycle 3
+Agent decision: AgentDecision(next_action='place_cube', target_color='green', reason='Local Level 1 policy: pad coordinate navigation succeeded.', recovery_strategy=None)
+Action result (1.91s): {'action': 'place_cube', 'target_color': 'green', 'was_holding': True, 'ok': True, 'result': {'status': 'done', 'error': None}, 'duration_s': 1.915}
+[Progress] delivered_raw=6 scored_delta=1 held=None stage=need_cube robot_xy=(1.073003399200685, -1.8536685144319183)
+
+[Level 1] Cycle 4
+Agent decision: AgentDecision(next_action='pick_cube', target_color=None, reason='Local Level 1 policy: at source anchor; pick nearest conveyor cube directly.', recovery_strategy=None)
+Action result (1.13s): {'action': 'pick_cube', 'target_color': None, 'ok': True, 'result': {'status': 'done', 'error': None}, 'duration_s': 1.126}
+[Progress] delivered_raw=6 scored_delta=1 held=blue stage=need_pad robot_xy=(1.073149687129111, -1.8537461748145696)
+
+[Level 1] Cycle 5
+Agent decision: AgentDecision(next_action='navigate_to_pad', target_color='blue', reason='Local Level 1 policy: holding cube; use remembered/scanned pad coordinate.', recovery_strategy=None)
+Action result (19.61s): {'action': 'navigate_to_pad', 'ok': True, 'target_xy': (2.0875367100909386, -0.7589022631239751), 'robot_xy': (2.027108072125254, -0.5850119395508558), 'robot_z': 0.6183810835124334, 'reached_by_position': True, 'corrected_by_position': False, 'blocked_by_stuck': False, 'tolerance_m': 0.85, 'duration_s': 19.606, 'result': {'status': 'done', 'error': None}, 'error': None, 'status_warning': None, 'nav_xy': (2.0875367100909386, -0.7589022631239751), 'partial': False, 'target_color': 'blue'}
+[Progress] delivered_raw=6 scored_delta=1 held=blue stage=ready_place robot_xy=(2.02626754612716, -0.5876313001071083)
+
+[Level 1] Cycle 6
+Agent decision: AgentDecision(next_action='place_cube', target_color='blue', reason='Local Level 1 policy: pad coordinate navigation succeeded.', recovery_strategy=None)
+Action result (1.05s): {'action': 'place_cube', 'target_color': 'blue', 'was_holding': True, 'ok': False, 'result': {'status': 'failed', 'error': 'drop failed — not near a pallet (must be within 1.20m of pad_A, pad_B, pad_C, pad_D, or pad_E)'}, 'duration_s': 1.054}
+[Progress] delivered_raw=6 scored_delta=1 held=blue stage=need_pad robot_xy=(2.026591030379349, -0.588251047343859)
+
+[Level 1] Cycle 7
+[PadReject] color=blue area=1837 centroid=(318, 21) bbox=(292, 0, 50, 50) bearing=-15.1 letter=0.000 wood=0.985 xy=(0.94,-2.67) unusable=False
+[PadReject] color=blue area=4126 centroid=(1201, 44) bbox=(1163, 1, 95, 78) bearing=26.3 letter=0.000 wood=0.515 xy=(2.52,-2.58) unusable=False
+[PadReject] color=blue area=2695 centroid=(34, 258) bbox=(0, 238, 109, 57) bearing=-2.6 letter=0.000 wood=0.446 xy=(1.44,-2.77) unusable=False
+[PadReject] color=blue area=3554 centroid=(24, 447) bbox=(0, 408, 78, 89) bearing=-28.9 letter=0.000 wood=0.352 xy=(0.92,-1.85) unusable=True
+Agent decision: AgentDecision(next_action='search_pad', target_color='blue', reason='Local Level 1 policy: holding cube but target pad coordinate is not visible yet.', recovery_strategy='wide_scan_then_turn')
+[PadReject] color=blue area=2135 centroid=(967, 85) bbox=(944, 51, 61, 65) bearing=1.0 letter=0.000 wood=0.489 xy=(1.57,-2.89) unusable=False
+[PadReject] color=blue area=2860 centroid=(1164, 71) bbox=(1108, 50, 91, 62) bearing=38.9 letter=0.000 wood=0.402 xy=(3.08,-2.69) unusable=False
+[PadReject] color=blue area=3613 centroid=(1117, 109) bbox=(1080, 62, 102, 72) bearing=36.7 letter=0.000 wood=0.343 xy=(2.96,-2.64) unusable=False
+[PadReject] color=blue area=4680 centroid=(246, 409) bbox=(204, 380, 91, 67) bearing=-4.2 letter=0.000 wood=0.314 xy=(1.61,-2.01) unusable=False
+Action result (21.17s): {'action': 'search_pad', 'ok': True, 'status': 'rotate_about_180', 'target_color': 'blue', 'detections': 305, 'motion': {'wz': 0.6, 'duration_s': 4.6}, 'duration_s': 21.167}
+[Progress] delivered_raw=6 scored_delta=1 held=blue stage=need_pad robot_xy=(1.9168582390828603, -0.5461170830432903)
+
+[Level 1] Cycle 8

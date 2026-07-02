@@ -1,0 +1,117 @@
+Created robot: rb_019f1dc0fbbd7040ba217e596e40e5b0
+============================================================
+VIEWER URL: https://sim.menlo.ai/?key=k1~d3NzOi8vbGl2ZWtpdC5tZW5sby5haQ~eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYW1lIjoiU2ltcGxlU2ltIFZpZXdlciAocmJfMDE5ZjFkYzBmYmJkNzA0MGJhMjE3ZTU5NmU0MGU1YjApIiwidmlkZW8iOnsicm9vbUpvaW4iOnRydWUsInJvb20iOiJyYl8wMTlmMWRjMGZiYmQ3MDQwYmEyMTdlNTk2ZTQwZTViMCIsImNhblB1Ymxpc2giOnRydWUsImNhblN1YnNjcmliZSI6dHJ1ZSwiY2FuUHVibGlzaERhdGEiOnRydWV9LCJzdWIiOiJzaW1wbGVzaW06cmJfMDE5ZjFkYzBmYmJkNzA0MGJhMjE3ZTU5NmU0MGU1YjAiLCJpc3MiOiJBUElwcm9kTGl2ZUtpdDIwMjQiLCJuYmYiOjE3ODI5MTA2MTcsImV4cCI6MTc4MjkyNTAxN30.fAZ9UYS42xIcUoN7o1Im5BCYFf7z6D3DHJrBRMzzz1o
+============================================================
+Open the viewer URL in Chrome, wait for the warehouse to load, then press Enter...
+Auto-proceeding after 5 seconds...
+Skills found:
+  - go_to
+  - set_velocity
+  - cancel
+  - pick_entity
+  - place_entity
+  - set_head
+  - set_sim_speed
+  - configure_benchmark
+  - set_color_mode
+  - select_scene
+Find and sort cubes from the source area into their matching destination pads.
+Level 1 fast coordinate-navigation agent 실행
+
+[Level 1] Cycle 1
+Completion timer started at first cycle (target cubes=any, time limit=600s, 20 points per delivery).
+[Target] cube color=green area=11852 centroid=(581, 679) bbox=(497, 635, 160, 85) bearing=-2.8 xy=(0.86,-1.52)
+Agent decision: AgentDecision(next_action='navigate_to_cube', target_color='green', reason='Local Level 1 policy: projected visible source/cube blob to world coordinate.', recovery_strategy=None)
+Action result (1.44s): {'action': 'navigate_to_cube', 'target_xy': (0.8551603758298847, -1.5161345438391192), 'target_color': 'green', 'ok': True, 'result': {'status': 'done', 'error': None}}
+[Progress] delivered_raw=5 scored_delta=0 held=None stage=ready_pick robot_xy=(0.7112949046906676, -1.5495452058663255)
+
+[Level 1] Cycle 2
+Agent decision: AgentDecision(next_action='pick_cube', target_color='green', reason='Local Level 1 policy: cube coordinate navigation succeeded.', recovery_strategy=None)
+Action result (0.34s): {'action': 'pick_cube', 'target_color': 'green', 'ok': True, 'result': {'status': 'done', 'error': None}}
+[Progress] delivered_raw=5 scored_delta=0 held=blue stage=need_pad robot_xy=(0.7191402968145522, -1.5462396521401607)
+
+[Level 1] Cycle 3
+[Target] pad color=blue area=6750 centroid=(1045, 378) bbox=(998, 333, 100, 98) bearing=19.0 xy=(1.66,-1.36)
+Agent decision: AgentDecision(next_action='navigate_to_pad', target_color='blue', reason='Local Level 1 policy: holding cube; use remembered/scanned pad coordinate.', recovery_strategy=None)
+Action result (17.41s): {'action': 'navigate_to_pad', 'target_xy': (1.6593417269192066, -1.3571049455209618), 'nav_xy': (1.6593417269192066, -1.3571049455209618), 'partial': False, 'target_color': 'blue', 'ok': True, 'result': {'status': 'done', 'error': None}}
+[Progress] delivered_raw=5 scored_delta=0 held=blue stage=ready_place robot_xy=(1.8198748931156548, -1.3262882985560698)
+
+[Level 1] Cycle 4
+[Target] pad color=blue area=18271 centroid=(1194, 489) bbox=(1093, 433, 187, 120) bearing=0.2 xy=(1.33,-0.62)
+Agent decision: AgentDecision(next_action='place_cube', target_color='blue', reason='Local Level 1 policy: pad coordinate navigation succeeded.', recovery_strategy=None)
+Action result (0.34s): {'action': 'place_cube', 'target_color': 'blue', 'was_holding': True, 'ok': True, 'result': {'status': 'done', 'error': None}}
+[Progress] delivered_raw=5 scored_delta=0 held=None stage=need_cube robot_xy=(1.8075818027263013, -1.317092264649681)
+
+[Level 1] Cycle 5
+[Target] cube color=green area=3487 centroid=(827, 690) bbox=(787, 649, 93, 71) bearing=8.8 xy=(1.39,-0.87)
+Agent decision: AgentDecision(next_action='navigate_to_cube', target_color='green', reason='Local Level 1 policy: projected visible source/cube blob to world coordinate.', recovery_strategy=None)
+Action result (19.59s): {'action': 'navigate_to_cube', 'target_xy': (1.3889386334032667, -0.8657733187992951), 'target_color': 'green', 'ok': False, 'result': {'status': 'failed', 'error': 'navigation stopped 0.307m from target, outside 0.300m completion radius'}}
+[Progress] delivered_raw=5 scored_delta=0 held=None stage=need_cube robot_xy=(0.8869011593538153, -1.31594682518051)
+
+[Level 1] Cycle 6
+[Target] cube color=green area=3728 centroid=(623, 690) bbox=(569, 631, 122, 84) bearing=-0.8 xy=(0.30,-1.29)
+Agent decision: AgentDecision(next_action='navigate_to_cube', target_color='green', reason='Local Level 1 policy: projected visible source/cube blob to world coordinate.', recovery_strategy=None)
+Action result (0.34s): {'action': 'navigate_to_cube', 'target_xy': (0.2958956005923491, -1.2908013148067807), 'target_color': 'green', 'ok': False, 'result': {'status': 'failed', 'error': 'robot is fallen — cannot execute mutating action'}}
+[Progress] delivered_raw=5 scored_delta=0 held=None stage=need_cube robot_xy=(0.8604766572482249, -1.3253628523729635)
+
+[Level 1] Cycle 7
+[Target] cube color=red area=5510 centroid=(154, 238) bbox=(117, 200, 76, 76) bearing=8.7 xy=(0.41,-1.38)
+Agent decision: AgentDecision(next_action='navigate_to_cube', target_color='red', reason='Local Level 1 policy: projected visible source/cube blob to world coordinate.', recovery_strategy=None)
+Action result (0.35s): {'action': 'navigate_to_cube', 'target_xy': (0.41328133865811584, -1.3751795862310088), 'target_color': 'red', 'ok': False, 'result': {'status': 'failed', 'error': 'robot is fallen — cannot execute mutating action'}}
+[Progress] delivered_raw=5 scored_delta=0 held=None stage=need_cube robot_xy=(0.8583176952252726, -1.32641913413809)
+
+[Level 1] Cycle 8
+[Target] cube color=yellow area=4692 centroid=(874, 243) bbox=(840, 179, 69, 114) bearing=11.0 xy=(0.41,-1.38)
+Agent decision: AgentDecision(next_action='navigate_to_cube', target_color='yellow', reason='Local Level 1 policy: projected visible source/cube blob to world coordinate.', recovery_strategy=None)
+Action result (0.34s): {'action': 'navigate_to_cube', 'target_xy': (0.4114839850311871, -1.3797439600677839), 'target_color': 'yellow', 'ok': False, 'result': {'status': 'failed', 'error': 'robot is fallen — cannot execute mutating action'}}
+[Progress] delivered_raw=5 scored_delta=0 held=None stage=need_cube robot_xy=(0.8604891818513246, -1.3267684623655958)
+
+[Level 1] Cycle 9
+[Target] cube color=green area=1178 centroid=(567, 693) bbox=(531, 678, 63, 35) bearing=-3.4 xy=(-0.48,-1.18)
+Agent decision: AgentDecision(next_action='navigate_to_cube', target_color='green', reason='Local Level 1 policy: projected visible source/cube blob to world coordinate.', recovery_strategy=None)
+Action result (0.34s): {'action': 'navigate_to_cube', 'target_xy': (-0.48182042818766624, -1.1826693646030553), 'target_color': 'green', 'ok': False, 'result': {'status': 'failed', 'error': 'robot is fallen — cannot execute mutating action'}}
+[Progress] delivered_raw=5 scored_delta=0 held=None stage=need_cube robot_xy=(0.86072706347867, -1.327130254751309)
+
+[Level 1] Cycle 10
+[Target] cube color=green area=3519 centroid=(666, 699) bbox=(615, 619, 121, 101) bearing=1.2 xy=(0.30,-1.31)
+Agent decision: AgentDecision(next_action='navigate_to_cube', target_color='green', reason='Local Level 1 policy: projected visible source/cube blob to world coordinate.', recovery_strategy=None)
+Action result (0.35s): {'action': 'navigate_to_cube', 'target_xy': (0.2963930783414148, -1.313275676170627), 'target_color': 'green', 'ok': False, 'result': {'status': 'failed', 'error': 'robot is fallen — cannot execute mutating action'}}
+[Progress] delivered_raw=5 scored_delta=0 held=None stage=need_cube robot_xy=(0.8607307502622827, -1.327465603332562)
+
+[Level 1] Cycle 11
+[Target] cube color=blue area=2129 centroid=(953, 199) bbox=(928, 178, 70, 65) bearing=14.7 xy=(0.32,-1.44)
+Agent decision: AgentDecision(next_action='navigate_to_cube', target_color='blue', reason='Local Level 1 policy: projected visible source/cube blob to world coordinate.', recovery_strategy=None)
+Action result (0.34s): {'action': 'navigate_to_cube', 'target_xy': (0.31596465338550883, -1.44356579927914), 'target_color': 'blue', 'ok': False, 'result': {'status': 'failed', 'error': 'robot is fallen — cannot execute mutating action'}}
+[Progress] delivered_raw=5 scored_delta=0 held=None stage=need_cube robot_xy=(0.8608674813233214, -1.3277917149322658)
+
+[Level 1] Cycle 12
+[Target] cube color=blue area=5838 centroid=(966, 271) bbox=(911, 195, 97, 127) bearing=15.3 xy=(0.42,-1.43)
+Agent decision: AgentDecision(next_action='navigate_to_cube', target_color='blue', reason='Local Level 1 policy: projected visible source/cube blob to world coordinate.', recovery_strategy=None)
+Action result (0.34s): {'action': 'navigate_to_cube', 'target_xy': (0.4217834535680278, -1.4263994956787336), 'target_color': 'blue', 'ok': False, 'result': {'status': 'failed', 'error': 'robot is fallen — cannot execute mutating action'}}
+[Progress] delivered_raw=5 scored_delta=0 held=None stage=need_cube robot_xy=(0.8607999784690358, -1.3281021550266792)
+
+[Level 1] Cycle 13
+[Target] cube color=red area=5150 centroid=(189, 239) bbox=(154, 203, 73, 73) bearing=10.4 xy=(0.41,-1.39)
+Agent decision: AgentDecision(next_action='navigate_to_cube', target_color='red', reason='Local Level 1 policy: projected visible source/cube blob to world coordinate.', recovery_strategy=None)
+Action result (0.34s): {'action': 'navigate_to_cube', 'target_xy': (0.4147840359915018, -1.388071432648152), 'target_color': 'red', 'ok': False, 'result': {'status': 'failed', 'error': 'robot is fallen — cannot execute mutating action'}}
+[Progress] delivered_raw=5 scored_delta=0 held=None stage=need_cube robot_xy=(0.8608428927001072, -1.3283950112627094)
+
+[Level 1] Cycle 14
+[Target] cube color=blue area=934 centroid=(581, 478) bbox=(515, 460, 105, 50) bearing=-2.8 xy=(-0.48,-1.20)
+Agent decision: AgentDecision(next_action='navigate_to_cube', target_color='blue', reason='Local Level 1 policy: projected visible source/cube blob to world coordinate.', recovery_strategy=None)
+Action result (0.34s): {'action': 'navigate_to_cube', 'target_xy': (-0.48281034858071314, -1.197241167921364), 'target_color': 'blue', 'ok': False, 'result': {'status': 'failed', 'error': 'robot is fallen — cannot execute mutating action'}}
+[Progress] delivered_raw=5 scored_delta=0 held=None stage=need_cube robot_xy=(0.8610265127138206, -1.328666960571561)
+
+[Level 1] Cycle 15
+[Target] cube color=yellow area=4911 centroid=(900, 241) bbox=(865, 176, 71, 116) bearing=12.2 xy=(0.42,-1.40)
+Agent decision: AgentDecision(next_action='navigate_to_cube', target_color='yellow', reason='Local Level 1 policy: projected visible source/cube blob to world coordinate.', recovery_strategy=None)
+Action result (0.34s): {'action': 'navigate_to_cube', 'target_xy': (0.4171836737122035, -1.4030847413634706), 'target_color': 'yellow', 'ok': False, 'result': {'status': 'failed', 'error': 'robot is fallen — cannot execute mutating action'}}
+[Progress] delivered_raw=5 scored_delta=0 held=None stage=need_cube robot_xy=(0.8609629540657497, -1.328965476985408)
+
+[Level 1] Cycle 16
+[Target] cube color=red area=5170 centroid=(190, 239) bbox=(154, 204, 74, 73) bearing=10.4 xy=(0.41,-1.39)
+Agent decision: AgentDecision(next_action='navigate_to_cube', target_color='red', reason='Local Level 1 policy: projected visible source/cube blob to world coordinate.', recovery_strategy=None)
+Action result (0.34s): {'action': 'navigate_to_cube', 'target_xy': (0.41489559055094793, -1.3886604503908482), 'target_color': 'red', 'ok': False, 'result': {'status': 'failed', 'error': 'robot is fallen — cannot execute mutating action'}}
+[Progress] delivered_raw=5 scored_delta=0 held=None stage=need_cube robot_xy=(0.8613285112916563, -1.3291880885080696)
+
+[Level 1] Cycle 17
