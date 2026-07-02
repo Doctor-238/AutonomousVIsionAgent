@@ -18,7 +18,9 @@ Level 1 rules:
 
 The scoring target is not "looks busy". The robot must pick a cube from the
 source conveyor area, identify the held color, move to the matching destination
-pad, place it, verify that the score increased, and repeat quickly.
+pad, place it, verify that the score increased, and repeat quickly. A
+`place_entity` SDK `done` result is not a scored delivery unless the delivered
+count increased.
 
 ## Working Rule
 
@@ -41,8 +43,9 @@ Work from evidence, one failure at a time:
 Treat the agent as a behavior tree:
 
 ```text
-warmup -> map_source -> pick_from_source -> classify_held
-       -> locate_pad -> navigate_pad -> place_verify -> return_source
+warmup -> semantic_scan -> source_pick -> classify_held
+       -> landmark_seek -> guarded_approach -> close_pallet_verify
+       -> place_commit -> score_verify -> return_or_recover
 ```
 
 The LLM is an advisory planner, not the real-time controller. The local policy
@@ -68,9 +71,9 @@ The source conveyor is the production station.
 
 A destination pad is not just a colored blob.
 
-- A valid pad candidate should look like a colored sign/target with white-letter
-  evidence or nearby wood/pallet evidence.
-- The A sign/conveyor area is not a destination.
+- A valid drop zone is not just the B/C/D/E sign. The sign is a landmark and a
+  bearing hint; the drop zone is the nearby wood pallet/container floor.
+- The A sign/conveyor area is always source only and is never a destination.
 - Use fixed sign semantics only as interpretation:
   B/red, C/green, D/blue, E/yellow.
 - Store `known_pad_xy` only from robot-status + camera-derived estimates.
@@ -78,14 +81,34 @@ A destination pad is not just a colored blob.
 - Store `rejected_pad_xy` after failed navigation or a placement that did not
   increase the score.
 - If `robot_status` is unavailable, do not create or update coordinate memory.
+- Do not store a non-held color as a current pad target during a delivery. Store
+  it only as a landmark ray or later map hint.
+- Reject top/edge-clipped blobs, large sign-only crops, shelf interiors, and
+  coordinates inside no-place/hazard zones.
+
+## Pallet Certificate
+
+The robot must not call `place_entity` just because it reached a coordinate.
+
+- Before placing, create a NearPalletCertificate from a downward close-look POV.
+- A certificate requires the held color, a target coordinate outside no-place and
+  hazard zones, normal robot height, and either a confirmed drop zone or fresh
+  same-color wood/pallet visual evidence near the robot.
+- If certificate creation fails, do not call `place_entity`; reject/remap the
+  candidate instead.
+- If `place_entity` returns `done` but the score does not increase, mark the
+  coordinate as rejected/no-place.
 
 ## Topological Memory
 
 Use a measured, partial map rather than fixed answer coordinates.
 
-- Track `source_anchor`, `known_pad_xy`, `confirmed_pad_xy`, `rejected_pad_xy`,
-  recent failed target positions, and delivery outcomes.
-- Opportunistically remember other pad candidates seen during scans.
+- Track `source_anchor`, `candidate_pad_xy`, `known_pad_xy`,
+  `confirmed_pad_xy`, `rejected_pad_xy`, `landmark_rays`, `no_place_zones`,
+  `hazard_zones`, safe scan hubs, recent failed target positions, and delivery
+  outcomes.
+- Opportunistically remember other signs as bearing rays, not as immediate
+  destination coordinates.
 - Search order for missing pads: left/front/right scan, rotate about 180 degrees,
   left/front/right scan again, then perform small exploratory moves with rescans.
 - Rejected coordinates should decay only after better evidence, not immediately.
@@ -95,10 +118,12 @@ Use a measured, partial map rather than fixed answer coordinates.
 Coordinate navigation is allowed, but it must be supervised.
 
 - Before `go_to`, validate that the target coordinate came from observation or
-  recorded memory and is not near a rejected coordinate.
+  recorded memory and is not near a rejected, no-place, or hazard coordinate.
 - Do not navigate on fake fallback `(0, 0)` status.
 - If `go_to` times out, read `robot_status`; if the robot is already within the
   target tolerance, treat it as reached.
+- Unconfirmed pad coordinates should be approached with short waypoints; only
+  confirmed drop zones may use faster direct routing.
 - Near a target, use only short, conservative `set_velocity` nudges. Do not drive
   straight into walls, shelves, or container boards.
 - Keep the default head pitch slightly downward. Use a lower close-look pitch

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """Menlo AI 로봇 분류 챌린지용 Level 1 프로젝트 시작 파일입니다.
 
@@ -55,8 +55,8 @@ SIGNAGE_NOTE = (
 
 COLOR_ORDER = ("red", "green", "blue", "yellow")
 CUBE_NAV_PITCH = float(os.environ.get("MENLO_LEVEL1_CUBE_PITCH", "0.34"))
-PAD_NAV_PITCH = float(os.environ.get("MENLO_LEVEL1_PAD_PITCH", "0.18"))
-CLOSE_LOOK_PITCH = float(os.environ.get("MENLO_LEVEL1_CLOSE_PITCH", "0.46"))
+PAD_NAV_PITCH = float(os.environ.get("MENLO_LEVEL1_PAD_PITCH", "0.35"))
+CLOSE_LOOK_PITCH = float(os.environ.get("MENLO_LEVEL1_CLOSE_PITCH", "0.50"))
 ROBOT_STATUS_TIMEOUT_S = float(os.environ.get("MENLO_LEVEL1_STATE_TIMEOUT_S", "6"))
 VISION_TIMEOUT_S = float(os.environ.get("MENLO_LEVEL1_VISION_TIMEOUT_S", "8"))
 HEAD_TIMEOUT_S = float(os.environ.get("MENLO_LEVEL1_HEAD_TIMEOUT_S", "6"))
@@ -65,13 +65,13 @@ PICK_TIMEOUT_S = float(os.environ.get("MENLO_LEVEL1_PICK_TIMEOUT_S", "35"))
 PLACE_TIMEOUT_S = float(os.environ.get("MENLO_LEVEL1_PLACE_TIMEOUT_S", "35"))
 RUNTIME_READY_TIMEOUT_S = float(os.environ.get("MENLO_LEVEL1_READY_TIMEOUT_S", "40"))
 LLM_ADVICE_TIMEOUT_S = float(os.environ.get("MENLO_LEVEL1_LLM_TIMEOUT_S", "3.5"))
-LLM_ADVICE_EVERY_N_CYCLES = int(os.environ.get("MENLO_LEVEL1_LLM_EVERY_N", "10"))
+LLM_ADVICE_EVERY_N_CYCLES = int(os.environ.get("MENLO_LEVEL1_LLM_EVERY_N", "25"))
 SIM_SPEED = float(os.environ.get("MENLO_SIM_SPEED", "1.0"))
 MAX_PAD_NAV_STEP_M = float(os.environ.get("MENLO_LEVEL1_MAX_PAD_NAV_STEP_M", "2.1"))
 SOURCE_REVISIT_RADIUS_M = float(os.environ.get("MENLO_LEVEL1_SOURCE_REVISIT_RADIUS_M", "0.85"))
 SOURCE_PICK_COOLDOWN_CYCLES = int(os.environ.get("MENLO_LEVEL1_SOURCE_PICK_COOLDOWN", "2"))
 NAV_REACHED_TOLERANCE_M = float(os.environ.get("MENLO_LEVEL1_NAV_REACHED_TOLERANCE_M", "0.72"))
-PAD_REACHED_TOLERANCE_M = float(os.environ.get("MENLO_LEVEL1_PAD_REACHED_TOLERANCE_M", "0.85"))
+PAD_REACHED_TOLERANCE_M = float(os.environ.get("MENLO_LEVEL1_PAD_REACHED_TOLERANCE_M", "0.45"))
 PAD_MIN_LETTER_SCORE = float(os.environ.get("MENLO_LEVEL1_PAD_MIN_LETTER_SCORE", "0.10"))
 PAD_MIN_WOOD_SCORE = float(os.environ.get("MENLO_LEVEL1_PAD_MIN_WOOD_SCORE", "0.025"))
 PAD_MIN_GREEN_LETTER_SCORE = float(os.environ.get("MENLO_LEVEL1_PAD_MIN_GREEN_LETTER_SCORE", "0.055"))
@@ -82,6 +82,13 @@ SAVE_POV_FRAMES = os.environ.get("MENLO_LEVEL1_SAVE_POV", "1").lower() not in {"
 POV_FRAME_DIR = os.environ.get("MENLO_LEVEL1_POV_DIR", os.path.join("run_logs", "pov_frames"))
 POV_MAX_FRAMES = int(os.environ.get("MENLO_LEVEL1_POV_MAX_FRAMES", "240"))
 SOURCE_NUDGE_DURATION_S = float(os.environ.get("MENLO_LEVEL1_SOURCE_NUDGE_DURATION_S", "0.85"))
+NO_PLACE_RADIUS_M = float(os.environ.get("MENLO_LEVEL1_NO_PLACE_RADIUS_M", "0.95"))
+HAZARD_RADIUS_M = float(os.environ.get("MENLO_LEVEL1_HAZARD_RADIUS_M", "0.85"))
+CONFIRMED_PLACE_RADIUS_M = float(os.environ.get("MENLO_LEVEL1_CONFIRMED_PLACE_RADIUS_M", "0.90"))
+DROP_APPROACH_RADIUS_M = float(os.environ.get("MENLO_LEVEL1_DROP_APPROACH_RADIUS_M", "1.20"))
+UNCONFIRMED_PAD_MAX_STEP_M = float(os.environ.get("MENLO_LEVEL1_UNCONFIRMED_PAD_MAX_STEP_M", "1.35"))
+SEMANTIC_MAP_LOG = os.environ.get("MENLO_LEVEL1_MAP_LOG", os.path.join("run_logs", "level1_worldmap.jsonl"))
+PAD_SCAN_YAWS = tuple(math.radians(deg) for deg in (-50, 0, 50))
 
 # LLM은 아래 set에서 상위 단계 행동을 선택해야 합니다. 원시 속도 명령을
 # 직접 출력하지 말고, 결정적 코드가 결정을 robot 행동으로 변환해야 합니다.
@@ -130,6 +137,14 @@ class AgentMemory:
     known_pad_xy: dict[str, tuple[float, float]] = field(default_factory=dict)
     confirmed_pad_xy: dict[str, tuple[float, float]] = field(default_factory=dict)
     rejected_pad_xy: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
+    blocked_pad_xy: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    pad_certificates: dict[str, dict[str, Any]] = field(default_factory=dict)
+    candidate_pad_xy: dict[str, tuple[float, float]] = field(default_factory=dict)
+    landmark_rays: dict[str, list[dict[str, float]]] = field(default_factory=dict)
+    no_place_zones: list[dict[str, Any]] = field(default_factory=list)
+    hazard_zones: list[dict[str, Any]] = field(default_factory=list)
+    safe_scan_hubs: list[tuple[float, float]] = field(default_factory=list)
+    semantic_map_events: list[dict[str, Any]] = field(default_factory=list)
     known_source_xy: tuple[float, float] | None = None
     priority_colors: list[str] = field(default_factory=list)
     blocked_colors: dict[str, int] = field(default_factory=dict)
@@ -495,6 +510,46 @@ async def scan_head(
     return all_detections
 
 
+async def close_visual_observation(ctx: Any, memory: AgentMemory, *, yaw: float = 0.0, pitch: float = CLOSE_LOOK_PITCH) -> Observation:
+    """Collect one downward close-look frame for guarded pick/place checks."""
+    try:
+        await set_head(ctx, yaw=yaw, pitch=pitch)
+        await asyncio.sleep(0.25)
+    except Exception:
+        pass
+    status = await get_robot_status_safe(ctx, memory)
+    try:
+        jpeg = await get_camera_frame(ctx)
+        image = decode_jpeg(jpeg)
+        raw_detections = detect_color_blobs(jpeg)
+    except Exception:
+        return Observation(robot_status=status, detections=[], note="close_visual_failed")
+    detections: list[Any] = []
+    for detection in raw_detections:
+        letter_score, wood_score = _visual_features_for_detection(image, detection)
+        detections.append(
+            ScannedDetection(
+                color=detection.color,
+                angle_deg=detection.angle_deg,
+                blob_area=detection.blob_area,
+                centroid=detection.centroid,
+                bbox=detection.bbox,
+                head_yaw=yaw,
+                head_pitch=pitch,
+                letter_score=letter_score,
+                wood_score=wood_score,
+                feature_ready=True,
+            )
+        )
+    frame_path = _save_pov_frame(jpeg, f"cycle{memory.cycle_index:04d}_close_yaw{yaw:+.2f}_pitch{pitch:+.2f}", detections)
+    if frame_path:
+        memory.diagnostic_frames.append(frame_path)
+        memory.diagnostic_frames = memory.diagnostic_frames[-24:]
+    observation = Observation(robot_status=status, detections=detections, note="close_visual")
+    _remember_pad_estimates(observation, memory)
+    return observation
+
+
 # ---------------------------------------------------------------------------
 # 학생 TODO: LLM decision 함수
 # ---------------------------------------------------------------------------
@@ -519,7 +574,7 @@ def _observation_scan_plan(memory: AgentMemory) -> tuple[tuple[float, ...], floa
     if memory.held_color:
         if memory.held_color in memory.known_pad_xy:
             return None
-        return (-0.9, -0.45, 0.0, 0.45, 0.9), PAD_NAV_PITCH
+        return (-0.65, 0.0, 0.65), PAD_NAV_PITCH
     if memory.stage == "ready_pick":
         return (0.0,), CLOSE_LOOK_PITCH
     if memory.known_source_xy is not None and memory.source_pick_cooldown <= 0:
@@ -633,10 +688,21 @@ def update_memory(
         memory.last_robot_xy = tuple(verified["robot_xy"])
     if verified.get("robot_z") is not None:
         memory.last_robot_z = float(verified["robot_z"])
+    if memory.last_robot_xy is not None:
+        _safe_scan_hub(memory, memory.last_robot_xy)
     memory.blocked_colors = {
         color: remaining - 1
         for color, remaining in memory.blocked_colors.items()
         if remaining > 1
+    }
+    memory.blocked_pad_xy = {
+        color: [
+            {**block, "ttl": int(block.get("ttl", 1)) - 1}
+            for block in blocks
+            if int(block.get("ttl", 1)) > 1
+        ]
+        for color, blocks in memory.blocked_pad_xy.items()
+        if any(int(block.get("ttl", 1)) > 1 for block in blocks)
     }
     memory.held_color = verified.get("held_color")
     action_result = verified.get("action_result", {})
@@ -646,6 +712,8 @@ def update_memory(
     if "fallen" in error_text:
         memory.fallen_detected = True
         memory.stage = "stopped"
+        if memory.last_robot_xy is not None:
+            _add_hazard_zone(memory, memory.last_robot_xy, reason="fallen", color=decision.target_color)
 
     if action == "navigate_to_cube":
         memory.cube_ready = ok
@@ -660,8 +728,10 @@ def update_memory(
             memory.source_pick_cooldown = 0
             if memory.last_robot_xy is not None:
                 memory.known_source_xy = memory.last_robot_xy
+                _add_no_place_zone(memory, memory.last_robot_xy, reason="source_conveyor_A", radius=0.45)
             elif memory.active_target_xy is not None:
                 memory.known_source_xy = memory.active_target_xy
+                _add_no_place_zone(memory, memory.active_target_xy, reason="source_conveyor_A", radius=0.45)
             memory.blocked_colors.pop(memory.held_color, None)
             memory.active_color = memory.held_color
             memory.cube_ready = False
@@ -687,10 +757,29 @@ def update_memory(
         memory.stage = "need_pad" if partial else ("ready_place" if ok else "need_pad")
         if not ok and decision.target_color:
             memory.failed_attempts[decision.target_color] = memory.failed_attempts.get(decision.target_color, 0) + 1
-            if decision.target_color not in memory.confirmed_pad_xy and memory.target_pad_xy is not None:
+            preflight_block = action_result.get("reason") in {
+                "no_place_zone",
+                "hazard_zone",
+                "source_or_conveyor_zone",
+                "probable_A_source_sign",
+                "held_or_floor_reflection",
+                "temporary_blocked_pad_xy",
+            }
+            if decision.target_color not in memory.confirmed_pad_xy and memory.target_pad_xy is not None and not preflight_block:
                 memory.rejected_pad_xy.setdefault(decision.target_color, []).append(memory.target_pad_xy)
                 memory.rejected_pad_xy[decision.target_color] = memory.rejected_pad_xy[decision.target_color][-4:]
+            elif preflight_block:
+                blocked_xy = action_result.get("target_xy") or memory.target_pad_xy
+                if blocked_xy is not None:
+                    _add_temporary_blocked_pad_xy(
+                        memory,
+                        decision.target_color,
+                        tuple(blocked_xy),
+                        reason=action_result.get("reason", "preflight_block"),
+                    )
+            if decision.target_color not in memory.confirmed_pad_xy:
                 memory.known_pad_xy.pop(decision.target_color, None)
+                memory.candidate_pad_xy.pop(decision.target_color, None)
                 memory.target_pad_xy = None
 
     elif action == "place_cube":
@@ -701,6 +790,8 @@ def update_memory(
             if target_color and memory.target_pad_xy is not None:
                 memory.confirmed_pad_xy[target_color] = memory.target_pad_xy
                 memory.known_pad_xy[target_color] = memory.target_pad_xy
+                memory.pad_certificates.pop(target_color, None)
+                _map_event(memory, "confirmed_drop_zone", color=target_color, xy=memory.target_pad_xy)
             memory.active_color = None
             memory.active_target_xy = None
             memory.target_pad_xy = None
@@ -712,7 +803,11 @@ def update_memory(
                 if memory.target_pad_xy is not None:
                     memory.rejected_pad_xy.setdefault(target_color, []).append(memory.target_pad_xy)
                     memory.rejected_pad_xy[target_color] = memory.rejected_pad_xy[target_color][-4:]
+                    if action_result.get("attempted_place", True):
+                        _add_no_place_zone(memory, memory.target_pad_xy, reason="place_without_score", color=target_color, radius=NO_PLACE_RADIUS_M)
                 memory.known_pad_xy.pop(target_color, None)
+                memory.candidate_pad_xy.pop(target_color, None)
+                memory.pad_certificates.pop(target_color, None)
             memory.target_pad_xy = None
             memory.stage = "need_pad" if memory.held_color else "need_cube"
             memory.pad_ready = False
@@ -752,8 +847,14 @@ def update_memory(
             "active_target_xy": memory.active_target_xy,
             "target_pad_xy": memory.target_pad_xy,
             "known_pad_xy": memory.known_pad_xy,
+            "candidate_pad_xy": memory.candidate_pad_xy,
             "confirmed_pad_xy": memory.confirmed_pad_xy,
             "rejected_pad_xy": memory.rejected_pad_xy,
+            "blocked_pad_xy": memory.blocked_pad_xy,
+            "pad_certificates": memory.pad_certificates,
+            "no_place_zones": memory.no_place_zones[-6:],
+            "hazard_zones": memory.hazard_zones[-6:],
+            "safe_scan_hubs": memory.safe_scan_hubs[-6:],
             "priority_colors": memory.priority_colors,
             "blocked_colors": memory.blocked_colors,
             "source_pick_cooldown": memory.source_pick_cooldown,
@@ -908,8 +1009,92 @@ def _xy_distance(a: tuple[float, float], b: tuple[float, float]) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
+def _map_event(memory: AgentMemory, kind: str, **data: Any) -> None:
+    event = {"kind": kind, "cycle": memory.cycle_index, "time": round(time.time(), 3), **data}
+    memory.semantic_map_events.append(event)
+    memory.semantic_map_events = memory.semantic_map_events[-80:]
+    if not SEMANTIC_MAP_LOG:
+        return
+    try:
+        path = Path(SEMANTIC_MAP_LOG)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        pass
+
+
+def _llm_backend_config(env: dict[str, str] | None = None) -> tuple[str | None, str | None, str]:
+    env = env or os.environ
+    tokamak_api_key = env.get("TOKAMAK_API_KEY")
+    if tokamak_api_key:
+        return "https://api.tokamak.sh/v1/chat/completions", tokamak_api_key, env.get("TOKAMAK_MODEL", "qwen/qwen3.6-35b-a3b")
+    openrouter_api_key = env.get("OPENROUTER_API_KEY") or env.get("ANTHROPIC_AUTH_TOKEN")
+    return "https://openrouter.ai/api/v1/chat/completions", openrouter_api_key, env.get("OPENROUTER_MODEL", "openrouter/free")
+
+
+def _add_zone(memory: AgentMemory, zones: list[dict[str, Any]], xy: tuple[float, float], *, reason: str, radius: float, color: str | None = None) -> None:
+    for zone in zones:
+        if _xy_distance(tuple(zone["xy"]), xy) < max(radius, float(zone.get("radius", radius))) * 0.55:
+            zone["radius"] = max(float(zone.get("radius", radius)), radius)
+            zone["reason"] = reason
+            zone["color"] = color
+            return
+    zones.append({"xy": xy, "radius": radius, "reason": reason, "color": color})
+    del zones[:-18]
+    _map_event(memory, "zone_added", xy=xy, radius=radius, reason=reason, color=color)
+
+
+def _add_no_place_zone(memory: AgentMemory, xy: tuple[float, float], *, reason: str, color: str | None = None, radius: float = NO_PLACE_RADIUS_M) -> None:
+    _add_zone(memory, memory.no_place_zones, xy, reason=reason, radius=radius, color=color)
+
+
+def _add_hazard_zone(memory: AgentMemory, xy: tuple[float, float], *, reason: str, color: str | None = None, radius: float = HAZARD_RADIUS_M) -> None:
+    _add_zone(memory, memory.hazard_zones, xy, reason=reason, radius=radius, color=color)
+
+
+def _xy_in_zones(xy: tuple[float, float], zones: list[dict[str, Any]], *, radius_scale: float = 1.0) -> bool:
+    return any(_xy_distance(tuple(zone["xy"]), xy) <= float(zone.get("radius", 0.0)) * radius_scale for zone in zones)
+
+
+def _safe_scan_hub(memory: AgentMemory, xy: tuple[float, float]) -> None:
+    if any(_xy_distance(xy, hub) < 0.55 for hub in memory.safe_scan_hubs):
+        return
+    memory.safe_scan_hubs.append(xy)
+    memory.safe_scan_hubs = memory.safe_scan_hubs[-8:]
+    _map_event(memory, "safe_scan_hub", xy=xy)
+
+
 def _is_rejected_pad_xy(memory: AgentMemory, color: str, xy: tuple[float, float]) -> bool:
     return any(_xy_distance(xy, bad_xy) < 1.0 for bad_xy in memory.rejected_pad_xy.get(color, []))
+
+
+def _add_temporary_blocked_pad_xy(
+    memory: AgentMemory,
+    color: str,
+    xy: tuple[float, float],
+    *,
+    reason: str,
+    radius: float = 0.72,
+    ttl: int = 5,
+) -> None:
+    blocks = memory.blocked_pad_xy.setdefault(color, [])
+    if any(_xy_distance(tuple(block["xy"]), xy) < radius for block in blocks):
+        for block in blocks:
+            if _xy_distance(tuple(block["xy"]), xy) < radius:
+                block["ttl"] = max(int(block.get("ttl", 1)), ttl)
+                block["reason"] = reason
+        return
+    blocks.append({"xy": xy, "radius": radius, "ttl": ttl, "reason": reason})
+    memory.blocked_pad_xy[color] = blocks[-8:]
+    _map_event(memory, "temporary_blocked_pad", color=color, xy=xy, reason=reason, ttl=ttl)
+
+
+def _is_temporarily_blocked_pad_xy(memory: AgentMemory, color: str, xy: tuple[float, float]) -> bool:
+    return any(
+        _xy_distance(xy, tuple(block["xy"])) <= float(block.get("radius", 0.72))
+        for block in memory.blocked_pad_xy.get(color, [])
+    )
 
 
 def _is_plausible_pad_xy(xy: tuple[float, float]) -> bool:
@@ -918,8 +1103,17 @@ def _is_plausible_pad_xy(xy: tuple[float, float]) -> bool:
 
 
 def _is_unusable_pad_xy(memory: AgentMemory, color: str, xy: tuple[float, float]) -> bool:
-    if not _is_plausible_pad_xy(xy) or _is_rejected_pad_xy(memory, color, xy):
+    if (
+        not _is_plausible_pad_xy(xy)
+        or _is_rejected_pad_xy(memory, color, xy)
+        or _is_temporarily_blocked_pad_xy(memory, color, xy)
+        or _xy_in_zones(xy, memory.no_place_zones)
+        or _xy_in_zones(xy, memory.hazard_zones)
+    ):
         return True
+    for other_color, confirmed_xy in memory.confirmed_pad_xy.items():
+        if other_color != color and _xy_distance(xy, confirmed_xy) < 0.95:
+            return True
     # C/green can sit immediately beside the A conveyor in the scored scenes.
     # B/D/E are farther away, so reject their source-near color blobs more
     # aggressively while still allowing the real C pallet.
@@ -934,6 +1128,164 @@ def _is_unusable_pad_xy(memory: AgentMemory, color: str, xy: tuple[float, float]
         if source_distance < min_source_distance:
             return True
     return False
+
+
+def _navigation_block_reason(memory: AgentMemory, xy: tuple[float, float], *, purpose: str, color: str | None = None) -> str | None:
+    if not _is_plausible_pad_xy(xy) and purpose == "pad":
+        return "implausible_pad_xy"
+    if color and _is_temporarily_blocked_pad_xy(memory, color, xy):
+        return "temporary_blocked_pad_xy"
+    if color and _is_rejected_pad_xy(memory, color, xy):
+        return "rejected_pad_xy"
+    if _xy_in_zones(xy, memory.hazard_zones):
+        return "hazard_zone"
+    if purpose in {"pad", "place"} and _xy_in_zones(xy, memory.no_place_zones):
+        return "no_place_zone"
+    if purpose in {"pad", "place"} and memory.known_source_xy is not None and _xy_distance(xy, memory.known_source_xy) < 0.65:
+        return "source_or_conveyor_zone"
+    return None
+
+
+def _is_probable_source_a_sign(memory: AgentMemory, status: Any, detection: Any, target_xy: tuple[float, float]) -> bool:
+    if getattr(detection, "color", None) != "green" or memory.known_source_xy is None or _status_unavailable(status):
+        return False
+    robot_xy = _robot_xy_yaw(status)[:2]
+    source_xy = memory.known_source_xy
+    if _xy_distance(robot_xy, source_xy) > 2.7:
+        return False
+    bearing = float(getattr(detection, "full_bearing_deg", getattr(detection, "angle_deg", 0.0)))
+    _, y, _, _, _, cy, area, _ = _bbox_metrics(detection)
+    # From the A/source belt, the real C pallet is usually off to the left,
+    # while the green A source sign sits ahead/right on the conveyor.
+    if bearing > -8.0 and y >= 220 and cy >= 260 and 2500 <= area <= 18000:
+        return True
+    # Live forensics: while farming the source, green false positives on the
+    # A/conveyor side and rack reflections repeatedly projected to the right
+    # half of the robot. Treat those as source-side no-place hints, not C.
+    if (
+        bearing > 35.0
+        and _xy_distance(target_xy, source_xy) < 2.55
+        and 180 <= y <= 360
+        and 220 <= cy <= 430
+        and 2000 <= area <= 22000
+    ):
+        return True
+    if _xy_distance(target_xy, source_xy) < 0.95:
+        return True
+    return False
+
+
+def _is_probable_held_or_floor_reflection(
+    memory: AgentMemory,
+    status: Any,
+    detection: Any,
+    target_xy: tuple[float, float] | None = None,
+) -> bool:
+    if getattr(detection, "color", None) != memory.held_color or memory.held_color is None:
+        return False
+    if _status_unavailable(status):
+        return False
+    _, y, width, height, _, cy, area, _ = _bbox_metrics(detection)
+    letter_score = float(getattr(detection, "letter_score", 0.0))
+    wood_score = float(getattr(detection, "wood_score", 0.0))
+
+    # A carried cube and glossy floor reflections stay low in the POV and can
+    # accidentally inherit wood/letter scores from the background crop.
+    if y >= 390 or cy >= 455:
+        return True
+    if cy >= 380 and area >= 9000 and letter_score < 0.04:
+        return True
+
+    if target_xy is not None:
+        robot_xy = _robot_xy_yaw(status)[:2]
+        if cy >= 330 and _xy_distance(robot_xy, target_xy) < 0.45 and letter_score < 0.12:
+            return True
+
+    # Thin same-color strips near the lower half are usually gripper/cube
+    # artifacts, not a pallet face.
+    if cy >= 330 and (height < 42 or width / max(height, 1) > 4.0) and wood_score < 0.20:
+        return True
+    return False
+
+
+def _robot_height_safe(robot_z: float | None) -> bool:
+    return robot_z is None or robot_z >= 0.42
+
+
+def _pad_visual_evidence(detection: Any, color: str) -> bool:
+    if getattr(detection, "color", None) != color:
+        return False
+    if _looks_like_landmark_only(detection) or _bbox_is_edge_clipped(detection):
+        return False
+    if _looks_like_pad_candidate(detection):
+        return True
+    if not getattr(detection, "feature_ready", False):
+        return False
+    letter_score = float(getattr(detection, "letter_score", 0.0))
+    wood_score = float(getattr(detection, "wood_score", 0.0))
+    if color == "green":
+        return letter_score >= PAD_MIN_GREEN_LETTER_SCORE and wood_score >= PAD_MIN_GREEN_WOOD_SCORE
+    return letter_score >= PAD_MIN_LETTER_SCORE and wood_score >= PAD_MIN_WOOD_SCORE
+
+
+def _make_pallet_certificate(
+    observation: Observation,
+    memory: AgentMemory,
+    color: str | None,
+    *,
+    target_xy: tuple[float, float] | None = None,
+) -> dict[str, Any] | None:
+    if color not in COLOR_ORDER or target_xy is None or _status_unavailable(observation.robot_status):
+        return None
+    robot_xy = _robot_xy_yaw(observation.robot_status)[:2]
+    robot_z = _robot_z(observation.robot_status)
+    if not _robot_height_safe(robot_z):
+        _add_hazard_zone(memory, robot_xy, reason="unsafe_robot_height", color=color)
+        return None
+    block_reason = _navigation_block_reason(memory, target_xy, purpose="place", color=color)
+    if block_reason:
+        return None
+    distance_to_target = _xy_distance(robot_xy, target_xy)
+    if color in memory.confirmed_pad_xy and distance_to_target <= CONFIRMED_PLACE_RADIUS_M:
+        cert = {
+            "color": color,
+            "target_xy": target_xy,
+            "robot_xy": robot_xy,
+            "distance_m": round(distance_to_target, 3),
+            "source": "confirmed_drop_zone",
+        }
+        memory.pad_certificates[color] = cert
+        return cert
+    if distance_to_target > DROP_APPROACH_RADIUS_M:
+        return None
+    evidence = [
+        detection
+        for detection in observation.detections
+        if _pad_visual_evidence(detection, color)
+        and not _is_probable_held_or_floor_reflection(memory, observation.robot_status, detection, target_xy)
+    ]
+    if not evidence:
+        return None
+    best = max(
+        evidence,
+        key=lambda detection: (
+            float(getattr(detection, "wood_score", 0.0)) * 2.0 + float(getattr(detection, "letter_score", 0.0)),
+            getattr(detection, "blob_area", 0),
+        ),
+    )
+    cert = {
+        "color": color,
+        "target_xy": target_xy,
+        "robot_xy": robot_xy,
+        "distance_m": round(distance_to_target, 3),
+        "bbox": getattr(best, "bbox", None),
+        "letter": round(float(getattr(best, "letter_score", 0.0)), 3),
+        "wood": round(float(getattr(best, "wood_score", 0.0)), 3),
+        "source": "near_pallet_visual",
+    }
+    memory.pad_certificates[color] = cert
+    _map_event(memory, "pallet_certificate", color=color, certificate=cert)
+    return cert
 
 
 def _project_detection_xy(
@@ -991,20 +1343,47 @@ def _bbox_metrics(detection: Any) -> tuple[int, int, int, int, int, int, int, fl
     return x, y, width, height, cx, cy, area, aspect
 
 
+def _bbox_is_edge_clipped(detection: Any, *, frame_width: int = 1280, frame_height: int = 720, margin: int = 3) -> bool:
+    x, y, width, height, _, _, _, _ = _bbox_metrics(detection)
+    return x <= margin or y <= margin or x + width >= frame_width - margin or y + height >= frame_height - margin
+
+
+def _looks_like_landmark_only(detection: Any) -> bool:
+    x, y, width, height, _, cy, area, _ = _bbox_metrics(detection)
+    letter_score = float(getattr(detection, "letter_score", 0.0))
+    wood_score = float(getattr(detection, "wood_score", 0.0))
+    if getattr(detection, "color", None) == "blue" and _looks_like_blue_pallet_candidate(detection):
+        return False
+    if _looks_like_blue_d_landmark(detection):
+        return True
+    if _bbox_is_edge_clipped(detection) and area >= 2400:
+        return True
+    return area >= 9000 and width >= 110 and height >= 85 and cy >= 160 and letter_score >= 0.04 and wood_score < 0.06
+
+
 def _estimate_detection_distance(detection: Any, *, target_kind: str) -> float:
     _, _, width, height, _, cy, area, _ = _bbox_metrics(detection)
     if area <= 0:
         return 2.0
     if target_kind == "pad":
+        wood_score = float(getattr(detection, "wood_score", 0.0))
+        far_blue_pallet_ray = (
+            getattr(detection, "color", None) == "blue"
+            and getattr(detection, "feature_ready", False)
+            and wood_score >= 0.45
+            and cy < 170
+            and area < 4500
+        )
         base = 230.0 / math.sqrt(max(area, 1))
         height_hint = 95.0 / max(height, 1)
         distance = 0.65 * base + 0.35 * height_hint
         if cy < 180:
             distance += 0.5
-        # The colored letter is mounted on/near the pallet. Navigating near the
-        # sign center can drive the humanoid into shelving, so stop well before
-        # the sign while staying within place_entity range.
-        distance -= 1.20
+        if far_blue_pallet_ray:
+            distance += 1.15
+        # Project the observed sign/pallet center first. navigate_to_pad applies
+        # the physical standoff later; subtracting here as well made live runs
+        # stop at A/conveyor instead of reaching the C pallet approach zone.
         if (
             getattr(detection, "color", None) == "blue"
             and area >= 9000
@@ -1015,10 +1394,12 @@ def _estimate_detection_distance(detection: Any, *, target_kind: str) -> float:
             # D is often seen from the A conveyor behind the big source sign.
             # The pallet is farther along the bearing than the blue sign crop
             # estimate suggests; the generic standoff otherwise drops at A.
-            distance += 1.15
+            distance += 0.45
         if area > 12000:
             distance -= 0.15
-        return max(0.85, min(2.35, distance))
+        if far_blue_pallet_ray:
+            return max(2.75, min(3.95, distance))
+        return max(0.40, min(2.35, distance))
 
     # Live testing showed the first implementation projected conveyor cubes
     # several meters past the source belt. For Level 1, arriving within pick
@@ -1099,12 +1480,27 @@ def _looks_like_blue_pallet_candidate(detection: Any) -> bool:
         return False
     x, y, width, height, _, cy, area, aspect = _bbox_metrics(detection)
     wood_score = float(getattr(detection, "wood_score", 0.0))
+    side_clipped = x <= 3 or x + width >= 1280 - 3
+    vertical_clipped = y <= 3 or y + height >= 720 - 3
+    if _bbox_is_edge_clipped(detection):
+        high_conf_side_view = (
+            side_clipped
+            and not vertical_clipped
+            and 1800 <= area <= 5500
+            and width >= 55
+            and height >= 45
+            and 12 <= y <= 220
+            and cy <= 230
+            and wood_score >= 0.70
+        )
+        if not high_conf_side_view:
+            return False
     return (
         1600 <= area <= 6500
         and width >= 60
         and height >= 45
         and 0.75 <= aspect <= 2.1
-        and y <= 170
+        and 12 <= y <= 220
         and cy <= 220
         and wood_score >= 0.32
     )
@@ -1112,6 +1508,8 @@ def _looks_like_blue_pallet_candidate(detection: Any) -> bool:
 
 def _looks_like_pad_candidate(detection: Any) -> bool:
     if not _looks_like_pad_shape_candidate(detection):
+        return False
+    if _looks_like_landmark_only(detection):
         return False
     x, y, width, height, _, cy, area, _ = _bbox_metrics(detection)
     if getattr(detection, "feature_ready", False):
@@ -1122,6 +1520,8 @@ def _looks_like_pad_candidate(detection: Any) -> bool:
                 return True
             if _looks_like_blue_d_landmark(detection):
                 return False
+        if _bbox_is_edge_clipped(detection):
+            return False
         min_letter = PAD_MIN_GREEN_LETTER_SCORE if detection.color == "green" else PAD_MIN_LETTER_SCORE
         min_wood = PAD_MIN_GREEN_WOOD_SCORE if detection.color == "green" else PAD_MIN_WOOD_SCORE
         if PAD_STRICT_FEATURES:
@@ -1146,8 +1546,9 @@ def _score_cube_candidate(detection: Any, memory: AgentMemory) -> float:
 
 def _score_pad_candidate(detection: Any, memory: AgentMemory, target_color: str) -> float:
     _, _, _, _, _, cy, area, aspect = _bbox_metrics(detection)
+    bearing = float(getattr(detection, "full_bearing_deg", getattr(detection, "angle_deg", 0.0)))
     score = min(area, 35000) / 1300.0
-    score -= abs(float(getattr(detection, "full_bearing_deg", getattr(detection, "angle_deg", 0.0)))) / 4.0
+    score -= abs(bearing) / 4.0
     score -= abs(1.0 - aspect) * 4.0
     score += float(getattr(detection, "letter_score", 0.0)) * 90.0
     score += float(getattr(detection, "wood_score", 0.0)) * 45.0
@@ -1155,6 +1556,11 @@ def _score_pad_candidate(detection: Any, memory: AgentMemory, target_color: str)
         score += 8.0
     if target_color in memory.known_pad_xy:
         score += 5.0
+    if target_color == "green" and memory.known_source_xy is not None:
+        if -55.0 <= bearing <= 15.0:
+            score += 24.0
+        elif bearing > 35.0:
+            score -= 48.0
     return score
 
 
@@ -1177,14 +1583,70 @@ def _pad_candidates(observation: Observation, memory: AgentMemory, target_color:
     return sorted(candidates, key=lambda detection: _score_pad_candidate(detection, memory, target_color), reverse=True)
 
 
+def _landmark_seek_candidates(observation: Observation, memory: AgentMemory, target_color: str) -> list[Any]:
+    status = observation.robot_status
+    if target_color not in COLOR_ORDER or _status_unavailable(status):
+        return []
+    candidates: list[Any] = []
+    for detection in observation.detections:
+        if getattr(detection, "color", None) != target_color or not getattr(detection, "feature_ready", False):
+            continue
+        x, y, width, height, _, cy, area, _ = _bbox_metrics(detection)
+        letter_score = float(getattr(detection, "letter_score", 0.0))
+        if letter_score < 0.075:
+            continue
+        if not (2400 <= area <= 42000 and 45 <= width <= 190 and 55 <= height <= 270 and cy <= 430):
+            continue
+        target_xy = _project_detection_xy(status, detection, target_kind="pad")
+        if _is_probable_source_a_sign(memory, status, detection, target_xy):
+            continue
+        if _is_probable_held_or_floor_reflection(memory, status, detection, target_xy):
+            continue
+        if _xy_in_zones(target_xy, memory.hazard_zones):
+            continue
+        candidates.append(detection)
+    return sorted(
+        candidates,
+        key=lambda detection: (
+            float(getattr(detection, "letter_score", 0.0)) * 120.0
+            - abs(float(getattr(detection, "full_bearing_deg", getattr(detection, "angle_deg", 0.0)))) / 3.0
+            + min(float(getattr(detection, "blob_area", 0)), 15000.0) / 1800.0
+        ),
+        reverse=True,
+    )
+
+
+def _remember_landmark_rays(observation: Observation, memory: AgentMemory) -> None:
+    status = observation.robot_status
+    if _status_unavailable(status):
+        return
+    rx, ry, _ = _robot_xy_yaw(status)
+    for detection in observation.detections:
+        color = getattr(detection, "color", None)
+        if color not in COLOR_ORDER or not _looks_like_landmark_only(detection):
+            continue
+        ray = {
+            "origin_x": rx,
+            "origin_y": ry,
+            "bearing_deg": _bearing_world_deg(status, detection),
+            "area": float(getattr(detection, "blob_area", 0)),
+            "letter": float(getattr(detection, "letter_score", 0.0)),
+            "wood": float(getattr(detection, "wood_score", 0.0)),
+        }
+        memory.landmark_rays.setdefault(color, []).append(ray)
+        memory.landmark_rays[color] = memory.landmark_rays[color][-8:]
+        _map_event(memory, "landmark_ray", color=color, ray=ray)
+
+
 def _remember_pad_estimates(observation: Observation, memory: AgentMemory) -> None:
+    _remember_landmark_rays(observation, memory)
     if memory.held_color is None and memory.stage not in {"need_pad", "ready_place"}:
         return
     status = observation.robot_status
     if _status_unavailable(status):
         return
     if memory.held_color in COLOR_ORDER:
-        colors = (memory.held_color,) + tuple(color for color in COLOR_ORDER if color != memory.held_color)
+        colors = (memory.held_color,)
     else:
         colors = COLOR_ORDER
     for color in colors:
@@ -1226,6 +1688,12 @@ def _remember_pad_estimates(observation: Observation, memory: AgentMemory) -> No
         if color in memory.known_pad_xy and memory.held_color != color:
             continue
         target_xy = _project_detection_xy(status, detection, target_kind="pad")
+        if _is_probable_source_a_sign(memory, status, detection, target_xy):
+            _add_no_place_zone(memory, target_xy, reason="probable_A_source_sign", color=color, radius=0.75)
+            continue
+        if _is_probable_held_or_floor_reflection(memory, status, detection, target_xy):
+            _map_event(memory, "pad_candidate_blocked", color=color, xy=target_xy, reason="held_or_floor_reflection")
+            continue
         if _is_unusable_pad_xy(memory, color, target_xy):
             continue
         print(
@@ -1237,6 +1705,8 @@ def _remember_pad_estimates(observation: Observation, memory: AgentMemory) -> No
             f"xy=({target_xy[0]:.2f},{target_xy[1]:.2f})"
         )
         memory.known_pad_xy[color] = target_xy
+        memory.candidate_pad_xy[color] = target_xy
+        _map_event(memory, "drop_candidate", color=color, xy=target_xy, bbox=detection.bbox)
 
 
 def _select_next_cube(observation: Observation, memory: AgentMemory) -> Any | None:
@@ -1399,18 +1869,13 @@ async def _ask_llm_advice(
     local_decision: AgentDecision,
 ) -> AgentDecision | None:
     disabled = os.environ.get("MENLO_LEVEL1_DISABLE_LLM", "").lower() in {"1", "true", "yes"}
-    api_key = (
-        os.environ.get("OPENROUTER_API_KEY")
-        or os.environ.get("TOKAMAK_API_KEY")
-        or os.environ.get("ANTHROPIC_AUTH_TOKEN")
-    )
+    backend_url, api_key, model = _llm_backend_config()
+    if backend_url and "tokamak.sh" in backend_url:
+        import menlo_runner.llm
+        menlo_runner.llm.OPENROUTER_URL = backend_url
     if disabled or not api_key:
         return None
-    should_ask = (
-        memory.cycle_index <= 1
-        or _is_failure(last_result.get("action_result") if last_result else None)
-        or (LLM_ADVICE_EVERY_N_CYCLES > 0 and memory.cycle_index % LLM_ADVICE_EVERY_N_CYCLES == 0)
-    )
+    should_ask = LLM_ADVICE_EVERY_N_CYCLES > 0 and memory.cycle_index % LLM_ADVICE_EVERY_N_CYCLES == 0
     if not should_ask:
         return None
 
@@ -1438,7 +1903,7 @@ async def _ask_llm_advice(
                 call_llm,
                 messages,
                 api_key=api_key,
-                model=os.environ.get("OPENROUTER_MODEL", "openrouter/free"),
+                model=model,
                 timeout_s=max(1, int(LLM_ADVICE_TIMEOUT_S)),
             ),
             timeout=LLM_ADVICE_TIMEOUT_S + 0.75,
@@ -1546,7 +2011,31 @@ async def _supervised_go_to_xy(
     except Exception as exc:
         status_warning = f"{type(exc).__name__}: {exc}"
 
+    if not sdk_ok and robot_xy is not None:
+        dist = _xy_distance(robot_xy, target_xy)
+        if dist > tolerance_m:
+            dx = target_xy[0] - robot_xy[0]
+            dy = target_xy[1] - robot_xy[1]
+            angle = math.atan2(dy, dx)
+            backup_xy = (target_xy[0] - math.cos(angle) * 0.5, target_xy[1] - math.sin(angle) * 0.5)
+            print(f"[Navigate] go_to failed. Attempting backup waypoint xy={backup_xy} to avoid obstacle.")
+            try:
+                result2 = await go_to_xy(ctx, *backup_xy)
+                sdk_ok = _sdk_ok(result2)
+                result_summary_data = result_summary(result2)
+                status = await get_robot_status(ctx)
+                robot_xy = _robot_xy_yaw(status)[:2]
+                robot_z = _robot_z(status)
+                memory.last_robot_status = status
+                memory.last_robot_xy = robot_xy
+                memory.last_robot_z = robot_z
+            except Exception as exc:
+                print(f"[Navigate] Backup go_to failed: {exc}")
+
+
     reached = robot_xy is not None and _xy_distance(robot_xy, target_xy) <= tolerance_m
+    if robot_xy is not None and robot_z is not None and not _robot_height_safe(robot_z):
+        _add_hazard_zone(memory, robot_xy, reason="unsafe_robot_height_after_go_to")
     result_error = ""
     if result_summary_data:
         result_error = str(result_summary_data.get("error") or "")
@@ -1592,7 +2081,7 @@ async def execute_decision(
 
     if decision.next_action == "search_pad":
         target_color = decision.target_color or memory.held_color
-        detections = await scan_head(ctx, yaws=(-1.2, -0.75, -0.25, 0.25, 0.75, 1.2), pitch=PAD_NAV_PITCH, memory=memory)
+        detections = await scan_head(ctx, yaws=PAD_SCAN_YAWS, pitch=PAD_NAV_PITCH, memory=memory)
         if memory.last_scan_attempts and memory.last_scan_failures >= memory.last_scan_attempts:
             return {
                 "action": "search_pad",
@@ -1617,7 +2106,16 @@ async def execute_decision(
             candidates = _pad_candidates(temp_observation, memory, target_color)
             for candidate in candidates:
                 target_xy = _project_detection_xy(status, candidate, target_kind="pad")
-                if _is_unusable_pad_xy(memory, target_color, target_xy):
+                if _is_probable_source_a_sign(memory, status, candidate, target_xy):
+                    _add_no_place_zone(memory, target_xy, reason="probable_A_source_sign", color=target_color, radius=0.75)
+                    continue
+                if _is_probable_held_or_floor_reflection(memory, status, candidate, target_xy):
+                    _map_event(memory, "pad_candidate_blocked", color=target_color, xy=target_xy, reason="held_or_floor_reflection")
+                    continue
+                block_reason = _navigation_block_reason(memory, target_xy, purpose="pad", color=target_color)
+                if _is_unusable_pad_xy(memory, target_color, target_xy) or block_reason:
+                    if block_reason:
+                        _map_event(memory, "pad_candidate_blocked", color=target_color, xy=target_xy, reason=block_reason)
                     continue
                 print(
                     "[Target] pad "
@@ -1628,7 +2126,9 @@ async def execute_decision(
                     f"xy=({target_xy[0]:.2f},{target_xy[1]:.2f})"
                 )
                 memory.known_pad_xy[target_color] = target_xy
+                memory.candidate_pad_xy[target_color] = target_xy
                 memory.target_pad_xy = target_xy
+                _map_event(memory, "drop_candidate", color=target_color, xy=target_xy, bbox=candidate.bbox)
                 return {
                     "action": "search_pad",
                     "ok": True,
@@ -1636,6 +2136,38 @@ async def execute_decision(
                     "target_xy": target_xy,
                     "target_color": target_color,
                     "detections": len(detections),
+                }
+            landmark_candidates = _landmark_seek_candidates(temp_observation, memory, target_color)
+            for landmark in landmark_candidates:
+                seek_xy = _project_detection_xy(status, landmark, target_kind="pad")
+                robot_xy = _robot_xy_yaw(status)[:2]
+                nav_xy, partial = _bounded_step_xy(robot_xy, seek_xy, max_step_m=UNCONFIRMED_PAD_MAX_STEP_M)
+                block_reason = _navigation_block_reason(memory, nav_xy, purpose="scan", color=target_color)
+                if block_reason:
+                    _map_event(memory, "landmark_seek_blocked", color=target_color, xy=nav_xy, reason=block_reason)
+                    continue
+                _map_event(memory, "landmark_seek", color=target_color, xy=seek_xy, nav_xy=nav_xy, bbox=landmark.bbox)
+                nav_result = await _supervised_go_to_xy(
+                    ctx,
+                    memory,
+                    nav_xy,
+                    action="landmark_seek",
+                    tolerance_m=NAV_REACHED_TOLERANCE_M,
+                )
+                if nav_result.get("ok") is True:
+                    memory.known_pad_xy[target_color] = seek_xy
+                    memory.candidate_pad_xy[target_color] = seek_xy
+                    memory.target_pad_xy = seek_xy
+                return {
+                    "action": "search_pad",
+                    "ok": nav_result.get("ok") is True,
+                    "status": "landmark_seek_go_to",
+                    "target_color": target_color,
+                    "target_xy": seek_xy,
+                    "nav_xy": nav_xy,
+                    "partial": partial,
+                    "detections": len(detections),
+                    "nav_result": nav_result,
                 }
         motion, search_status = _pad_search_motion(memory)
         try:
@@ -1684,12 +2216,47 @@ async def execute_decision(
             candidates = _pad_candidates(observation, memory, decision.target_color or "")
             if candidates:
                 target_xy = _project_detection_xy(observation.robot_status, candidates[0], target_kind="pad")
-                memory.known_pad_xy[decision.target_color or ""] = target_xy
+                color_key = decision.target_color or ""
+                if _is_probable_source_a_sign(memory, observation.robot_status, candidates[0], target_xy):
+                    block_reason = "probable_A_source_sign"
+                    _add_no_place_zone(memory, target_xy, reason=block_reason, color=color_key, radius=0.75)
+                elif _is_probable_held_or_floor_reflection(memory, observation.robot_status, candidates[0], target_xy):
+                    block_reason = "held_or_floor_reflection"
+                else:
+                    block_reason = _navigation_block_reason(memory, target_xy, purpose="pad", color=color_key)
+                if block_reason:
+                    _map_event(memory, "pad_candidate_blocked", color=color_key, xy=target_xy, reason=block_reason)
+                    target_xy = None
+                else:
+                    memory.known_pad_xy[color_key] = target_xy
+                    memory.candidate_pad_xy[color_key] = target_xy
         if target_xy is None:
             return {"action": "navigate_to_pad", "ok": False, "reason": "pad coordinate estimate 없음"}
+        block_reason = _navigation_block_reason(memory, target_xy, purpose="pad", color=decision.target_color)
+        if block_reason:
+            if decision.target_color:
+                memory.known_pad_xy.pop(decision.target_color, None)
+                memory.candidate_pad_xy.pop(decision.target_color, None)
+            return {"action": "navigate_to_pad", "ok": False, "target_xy": target_xy, "reason": block_reason}
         memory.target_pad_xy = target_xy
         robot_xy = _robot_xy_yaw(observation.robot_status)[:2]
-        nav_xy, partial = _bounded_step_xy(robot_xy, target_xy, max_step_m=MAX_PAD_NAV_STEP_M)
+        
+        # Calculate standoff coordinate 0.65m away to avoid colliding with the pallet
+        import math
+        dx = robot_xy[0] - target_xy[0]
+        dy = robot_xy[1] - target_xy[1]
+        dist = math.hypot(dx, dy)
+        if dist > 0.65:
+            standoff_xy = (target_xy[0] + (dx/dist)*0.65, target_xy[1] + (dy/dist)*0.65)
+        else:
+            standoff_xy = robot_xy
+
+        confirmed = decision.target_color in memory.confirmed_pad_xy
+        max_step = MAX_PAD_NAV_STEP_M if confirmed else min(MAX_PAD_NAV_STEP_M, UNCONFIRMED_PAD_MAX_STEP_M)
+        nav_xy, partial = _bounded_step_xy(robot_xy, standoff_xy, max_step_m=max_step)
+        nav_block = _navigation_block_reason(memory, nav_xy, purpose="pad", color=decision.target_color)
+        if nav_block:
+            return {"action": "navigate_to_pad", "ok": False, "target_xy": target_xy, "nav_xy": nav_xy, "reason": nav_block}
         nav_result = await _supervised_go_to_xy(
             ctx,
             memory,
@@ -1721,20 +2288,32 @@ async def execute_decision(
 
     if decision.next_action == "place_cube":
         was_holding = memory.held_color is not None
-        try:
-            await set_head(ctx, yaw=0.0, pitch=CLOSE_LOOK_PITCH)
-        except Exception:
-            pass
+        target_color = decision.target_color or memory.held_color
+        target_xy = memory.target_pad_xy or memory.known_pad_xy.get(target_color or "")
+        close_observation = await close_visual_observation(ctx, memory, yaw=0.0, pitch=CLOSE_LOOK_PITCH)
+        certificate = _make_pallet_certificate(close_observation, memory, target_color, target_xy=target_xy)
+        if certificate is None:
+            return {
+                "action": "place_cube",
+                "target_color": target_color,
+                "was_holding": was_holding,
+                "ok": False,
+                "attempted_place": False,
+                "target_xy": target_xy,
+                "error": "missing NearPalletCertificate",
+                "close_detections": len(close_observation.detections),
+            }
         try:
             result = await place_nearest_zone(ctx)
         except Exception as exc:
             return {"action": "place_cube", "ok": False, "was_holding": was_holding, "error": f"{type(exc).__name__}: {exc}"}
         return {
             "action": "place_cube",
-            "target_color": decision.target_color,
+            "target_color": target_color,
             "was_holding": was_holding,
             "ok": _sdk_ok(result),
             "result": result_summary(result),
+            "certificate": certificate,
         }
 
     if decision.next_action == "recover":

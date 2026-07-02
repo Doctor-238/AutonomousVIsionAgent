@@ -7,15 +7,22 @@ from menlo_runner.programs.project.ko.level_1_starter_ko import (
     AgentMemory,
     Observation,
     ScannedDetection,
+    _add_no_place_zone,
     _bounded_step_xy,
     _choose_local_decision,
     _estimate_detection_distance,
     _fallback_status,
     _failure_mode,
     _is_unusable_pad_xy,
+    _is_probable_held_or_floor_reflection,
+    _is_probable_source_a_sign,
+    _landmark_seek_candidates,
+    _llm_backend_config,
     _looks_like_close_source_cube,
     _looks_like_cube_candidate,
     _looks_like_pad_candidate,
+    _make_pallet_certificate,
+    _navigation_block_reason,
     _observation_scan_plan,
     _pad_search_motion,
     _project_detection_xy,
@@ -28,8 +35,8 @@ from menlo_runner.programs.project.ko.level_1_starter_ko import (
 )
 
 
-def status(x=0.0, y=0.0, yaw_deg=0.0):
-    pose = SimpleNamespace(position=(x, y, 0.0), yaw_deg=yaw_deg)
+def status(x=0.0, y=0.0, yaw_deg=0.0, z=0.62):
+    pose = SimpleNamespace(position=(x, y, z), yaw_deg=yaw_deg)
     return SimpleNamespace(robot=SimpleNamespace(pose=pose))
 
 
@@ -197,6 +204,34 @@ class Level1FastPolicyTest(unittest.TestCase):
 
         self.assertTrue(_looks_like_pad_candidate(blue_pallet))
 
+    def test_top_clipped_blue_pallet_fragment_is_not_actionable(self):
+        clipped = detection(
+            "blue",
+            area=3490,
+            centroid=(1070, 30),
+            bbox=(1038, 0, 68, 63),
+            angle=20.2,
+            feature_ready=True,
+            letter_score=0.0,
+            wood_score=0.9,
+        )
+
+        self.assertFalse(_looks_like_pad_candidate(clipped))
+
+    def test_side_clipped_blue_d_pallet_fragment_can_be_actionable(self):
+        side_visible_pallet = detection(
+            "blue",
+            area=3043,
+            centroid=(65, 63),
+            bbox=(0, 24, 103, 84),
+            angle=-29.1,
+            feature_ready=True,
+            letter_score=0.0,
+            wood_score=0.851,
+        )
+
+        self.assertTrue(_looks_like_pad_candidate(side_visible_pallet))
+
     def test_green_c_pad_allows_lower_start_view_signature(self):
         green_c = detection(
             "green",
@@ -263,6 +298,20 @@ class Level1FastPolicyTest(unittest.TestCase):
 
         self.assertGreaterEqual(distance, 0.85)
         self.assertLessEqual(distance, 2.35)
+
+    def test_far_blue_pallet_ray_projects_deeper_toward_d(self):
+        det = detection(
+            "blue",
+            area=1949,
+            centroid=(881, 101),
+            bbox=(829, 80, 90, 45),
+            feature_ready=True,
+            wood_score=0.697,
+        )
+
+        distance = _estimate_detection_distance(det, target_kind="pad")
+
+        self.assertGreaterEqual(distance, 2.75)
 
     def test_large_blue_d_sign_projects_deeper_than_generic_standoff(self):
         det = detection("blue", area=11687, centroid=(1156, 387), bbox=(1060, 338, 192, 105))
@@ -483,6 +532,7 @@ class Level1FastPolicyTest(unittest.TestCase):
 
         self.assertNotIn("blue", memory.confirmed_pad_xy)
         self.assertEqual(memory.rejected_pad_xy["blue"], [(1.2, -1.0)])
+        self.assertTrue(any(zone["reason"] == "place_without_score" for zone in memory.no_place_zones))
 
     def test_failed_blue_place_rejects_coordinate_without_blocking_remap(self):
         memory = AgentMemory(target_pad_xy=(2.1, -0.7), stage="ready_place", held_color="blue", delivered_count=0)
@@ -565,6 +615,44 @@ class Level1FastPolicyTest(unittest.TestCase):
         self.assertNotIn("green", memory.known_pad_xy)
         self.assertIsNone(memory.target_pad_xy)
 
+    def test_preflight_block_does_not_reject_pad_coordinate(self):
+        memory = AgentMemory(
+            target_pad_xy=(4.4, -0.35),
+            known_pad_xy={"green": (4.4, -0.35)},
+            stage="need_pad",
+        )
+        verified = {
+            "action_result": {"action": "navigate_to_pad", "ok": False, "reason": "no_place_zone"},
+            "held_color": "green",
+            "delivered_count": 0,
+        }
+
+        update_memory(memory, observation(), AgentDecision("navigate_to_pad", "green"), verified)
+
+        self.assertNotIn("green", memory.rejected_pad_xy)
+        self.assertNotIn("green", memory.known_pad_xy)
+        self.assertIsNone(memory.target_pad_xy)
+
+    def test_preflight_block_temporarily_blocks_repeated_pad_candidate(self):
+        blocked_xy = (0.97, 0.67)
+        memory = AgentMemory(
+            target_pad_xy=blocked_xy,
+            known_pad_xy={"blue": blocked_xy},
+            held_color="blue",
+            stage="need_pad",
+        )
+        verified = {
+            "action_result": {"action": "navigate_to_pad", "ok": False, "reason": "no_place_zone", "target_xy": blocked_xy},
+            "held_color": "blue",
+            "delivered_count": 0,
+        }
+
+        update_memory(memory, observation(), AgentDecision("navigate_to_pad", "blue"), verified)
+
+        self.assertNotIn("blue", memory.rejected_pad_xy)
+        self.assertNotIn("blue", memory.known_pad_xy)
+        self.assertTrue(_is_unusable_pad_xy(memory, "blue", blocked_xy))
+
     def test_real_pad_can_be_near_source_anchor(self):
         memory = AgentMemory(known_source_xy=(1.0, -1.4))
 
@@ -573,6 +661,13 @@ class Level1FastPolicyTest(unittest.TestCase):
         self.assertFalse(_is_unusable_pad_xy(memory, "blue", (1.7, -1.4)))
         self.assertTrue(_is_unusable_pad_xy(memory, "blue", (1.3, -1.4)))
         self.assertTrue(_is_unusable_pad_xy(memory, "green", (1.1, -1.35)))
+
+    def test_other_confirmed_pad_area_is_unusable_for_new_color(self):
+        memory = AgentMemory(confirmed_pad_xy={"green": (2.31, -2.51)})
+
+        self.assertTrue(_is_unusable_pad_xy(memory, "blue", (2.50, -2.62)))
+        self.assertFalse(_is_unusable_pad_xy(memory, "green", (2.50, -2.62)))
+        self.assertFalse(_is_unusable_pad_xy(memory, "blue", (3.45, -2.62)))
 
     def test_rejected_pad_coordinate_is_not_remembered_again(self):
         obs = observation(
@@ -609,6 +704,184 @@ class Level1FastPolicyTest(unittest.TestCase):
         _remember_pad_estimates(obs, memory)
 
         self.assertNotIn("green", memory.known_pad_xy)
+
+    def test_non_held_color_is_not_remembered_as_current_pad_target(self):
+        memory = AgentMemory(held_color="green", stage="need_pad")
+        obs = Observation(
+            robot_status=status(),
+            detections=[
+                detection(
+                    "green",
+                    area=5200,
+                    centroid=(95, 338),
+                    bbox=(42, 285, 92, 96),
+                    angle=-24.0,
+                    feature_ready=True,
+                    letter_score=0.08,
+                    wood_score=0.08,
+                ),
+                detection(
+                    "blue",
+                    area=3255,
+                    centroid=(1115, 60),
+                    bbox=(1083, 21, 80, 71),
+                    angle=22.3,
+                    feature_ready=True,
+                    letter_score=0.0,
+                    wood_score=0.512,
+                ),
+            ],
+        )
+
+        _remember_pad_estimates(obs, memory)
+
+        self.assertIn("green", memory.known_pad_xy)
+        self.assertNotIn("blue", memory.known_pad_xy)
+
+    def test_live_green_a_source_sign_is_blocked_but_left_c_is_allowed(self):
+        memory = AgentMemory(known_source_xy=(0.406, -1.497), held_color="green", stage="need_pad")
+        robot_status = status(x=0.406, y=-1.497, yaw_deg=0.0)
+        a_sign = detection(
+            "green",
+            area=4481,
+            centroid=(413, 299),
+            bbox=(379, 265, 70, 71),
+            angle=15.2,
+            feature_ready=True,
+            letter_score=0.087,
+            wood_score=0.139,
+        )
+        c_sign = detection(
+            "green",
+            area=8040,
+            centroid=(83, 352),
+            bbox=(38, 307, 93, 92),
+            angle=-26.1,
+            feature_ready=True,
+            letter_score=0.089,
+            wood_score=0.142,
+        )
+
+        a_xy = _project_detection_xy(robot_status, a_sign, target_kind="pad")
+        c_xy = _project_detection_xy(robot_status, c_sign, target_kind="pad")
+
+        self.assertTrue(_is_probable_source_a_sign(memory, robot_status, a_sign, a_xy))
+        self.assertFalse(_is_probable_source_a_sign(memory, robot_status, c_sign, c_xy))
+
+    def test_live_green_right_side_source_false_positive_is_not_remembered(self):
+        memory = AgentMemory(known_source_xy=(0.406, -1.497), held_color="green", stage="need_pad")
+        robot_status = status(x=0.406, y=-1.497, yaw_deg=0.0)
+        false_right = detection(
+            "green",
+            area=4907,
+            centroid=(907, 257),
+            bbox=(872, 220, 72, 75),
+            angle=87.5,
+            feature_ready=True,
+            letter_score=0.092,
+            wood_score=0.121,
+        )
+        obs = Observation(robot_status=robot_status, detections=[false_right])
+
+        _remember_pad_estimates(obs, memory)
+
+        self.assertNotIn("green", memory.known_pad_xy)
+
+    def test_live_held_cube_floor_reflection_is_not_place_evidence(self):
+        memory = AgentMemory(target_pad_xy=(0.48, 0.43), held_color="green", stage="ready_place")
+        robot_status = status(x=0.59, y=-0.27, yaw_deg=0.0)
+        reflected_held_cube = detection(
+            "green",
+            area=13800,
+            centroid=(735, 515),
+            bbox=(668, 445, 164, 118),
+            angle=5.2,
+            feature_ready=True,
+            letter_score=0.08,
+            wood_score=0.13,
+        )
+        obs = Observation(robot_status=robot_status, detections=[reflected_held_cube])
+
+        reflected_xy = _project_detection_xy(robot_status, reflected_held_cube, target_kind="pad")
+
+        self.assertTrue(_is_probable_held_or_floor_reflection(memory, robot_status, reflected_held_cube, reflected_xy))
+        self.assertIsNone(_make_pallet_certificate(obs, memory, "green", target_xy=(0.48, 0.43)))
+
+    def test_landmark_seek_uses_close_c_sign_but_not_huge_a_sign(self):
+        memory = AgentMemory(known_source_xy=(0.406, -1.497), held_color="green", stage="need_pad")
+        robot_status = status(x=1.87, y=-1.74, yaw_deg=0.0)
+        c_sign = detection(
+            "green",
+            area=12019,
+            centroid=(62, 209),
+            bbox=(7, 73, 112, 208),
+            angle=-27.1,
+            feature_ready=True,
+            letter_score=0.575,
+            wood_score=0.0,
+        )
+        huge_a = detection(
+            "green",
+            area=240000,
+            centroid=(850, 350),
+            bbox=(451, 0, 829, 720),
+            angle=6.5,
+            feature_ready=True,
+            letter_score=0.15,
+            wood_score=0.0,
+        )
+        obs = Observation(robot_status=robot_status, detections=[huge_a, c_sign])
+
+        candidates = _landmark_seek_candidates(obs, memory, "green")
+
+        self.assertEqual(candidates, [c_sign])
+
+    def test_no_place_zone_blocks_pad_navigation_target(self):
+        memory = AgentMemory()
+        _add_no_place_zone(memory, (1.0, -1.0), reason="source_conveyor_A", radius=0.6)
+
+        reason = _navigation_block_reason(memory, (1.2, -1.05), purpose="pad", color="blue")
+
+        self.assertEqual(reason, "no_place_zone")
+
+    def test_near_pallet_certificate_requires_close_visual_evidence(self):
+        memory = AgentMemory(target_pad_xy=(1.0, -1.0), held_color="blue", stage="ready_place")
+        obs_without_pallet = Observation(robot_status=status(x=1.1, y=-1.05), detections=[])
+
+        self.assertIsNone(_make_pallet_certificate(obs_without_pallet, memory, "blue", target_xy=(1.0, -1.0)))
+
+        obs_with_pallet = Observation(
+            robot_status=status(x=1.1, y=-1.05),
+            detections=[
+                detection(
+                    "blue",
+                    area=3255,
+                    centroid=(1115, 60),
+                    bbox=(1083, 21, 80, 71),
+                    feature_ready=True,
+                    wood_score=0.512,
+                )
+            ],
+        )
+
+        cert = _make_pallet_certificate(obs_with_pallet, memory, "blue", target_xy=(1.0, -1.0))
+
+        self.assertIsNotNone(cert)
+        self.assertEqual(cert["color"], "blue")
+
+    def test_tokamak_backend_takes_precedence_over_openrouter(self):
+        url, key, model = _llm_backend_config(
+            {
+                "TOKAMAK_API_KEY": "tokamak-secret",
+                "TOKAMAK_MODEL": "qwen/qwen3.6-35b-a3b",
+                "OPENROUTER_API_KEY": "openrouter-secret",
+                "OPENROUTER_MODEL": "openrouter/free",
+            }
+        )
+
+        self.assertIn("tokamak.sh", url)
+        self.assertEqual(key, "tokamak-secret")
+        self.assertEqual(model, "qwen/qwen3.6-35b-a3b")
 
     def test_confirmed_pad_coordinate_is_not_overwritten_by_source_view(self):
         memory = AgentMemory(

@@ -123,10 +123,18 @@ async def open_robot_context(
     print("=" * 60)
     print(f"VIEWER URL: {ctx.viewer_url}")
     print("=" * 60)
+    
+    # Write URL early so playwright can join it
+    import os
+    from pathlib import Path
+    Path("run_logs").mkdir(parents=True, exist_ok=True)
+    Path("run_logs/latest_level1_url.txt").write_text(str(ctx.viewer_url), encoding="ascii")
+    print("[Viewer] wrote run_logs/latest_level1_url.txt")
+    
     print("Open the viewer URL in Chrome, wait for the warehouse to load, then press Enter...")
     import time
-    time.sleep(5)
-    print("Auto-proceeding after 5 seconds...")
+    time.sleep(1)
+    print("Auto-proceeding after 1 seconds...")
     skills = await ctx.wait_for_skills()
     print("Skills found:")
     for skill in skills:
