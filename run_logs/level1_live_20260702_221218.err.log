@@ -1,0 +1,6 @@
+livekit::rtc_engine:446:livekit::rtc_engine - received session close: "signal client closed: \"ping timeout\"" UnknownReason Resume
+livekit::rtc_engine:716:livekit::rtc_engine - resuming connection... attempt: 0
+livekit::room::participant::local_participant:795:livekit::room::participant::local_participant - Ack received for unexpected RPC request: 3d526049-c589-40d4-8a93-2d605c9c80d3
+livekit::room::participant::local_participant:812:livekit::room::participant::local_participant - Response received for unexpected RPC request: 3d526049-c589-40d4-8a93-2d605c9c80d3
+livekit::room::participant::local_participant:795:livekit::room::participant::local_participant - Ack received for unexpected RPC request: 2640ae76-3282-4789-a5ed-571978bd701a
+livekit::room::participant::local_participant:812:livekit::room::participant::local_participant - Response received for unexpected RPC request: 2640ae76-3282-4789-a5ed-571978bd701a

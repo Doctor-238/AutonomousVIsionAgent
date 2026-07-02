@@ -1,9 +1,14 @@
-﻿import unittest
+import os
+import unittest
 
-from menlo_runner.llm import build_system_prompt, parse_tool_call
+from menlo_runner.llm import build_system_prompt, get_llm_model, get_vlm_model, parse_tool_call
 
 
 class ToolCallParserTest(unittest.TestCase):
+    def tearDown(self):
+        os.environ.pop("MENLO_LLM_MODEL", None)
+        os.environ.pop("MENLO_VLM_MODEL", None)
+
     def test_parse_fenced_json(self):
         text = '```json\n{"tool": "set_velocity", "args": {"vx": 0.8}}\n```'
         self.assertEqual(
@@ -29,8 +34,28 @@ class ToolCallParserTest(unittest.TestCase):
         self.assertIn("look", prompt)
         self.assertIn("Take a picture.", prompt)
 
+    def test_get_llm_model_uses_environment_override(self):
+        os.environ["MENLO_LLM_MODEL"] = "qwen/qwen3.6-35b-a3b"
+
+        self.assertEqual(get_llm_model(), "qwen/qwen3.6-35b-a3b")
+
+    def test_get_llm_model_rejects_unknown_model(self):
+        os.environ["MENLO_LLM_MODEL"] = "not-a-real-model"
+
+        with self.assertRaises(ValueError):
+            get_llm_model()
+
+    def test_get_vlm_model_uses_environment_override(self):
+        os.environ["MENLO_VLM_MODEL"] = "minimaxai/minimax-m3"
+
+        self.assertEqual(get_vlm_model(), "minimaxai/minimax-m3")
+
+    def test_get_vlm_model_rejects_unknown_model(self):
+        os.environ["MENLO_VLM_MODEL"] = "not-a-real-model"
+
+        with self.assertRaises(ValueError):
+            get_vlm_model()
+
 
 if __name__ == "__main__":
     unittest.main()
-
-

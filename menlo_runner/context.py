@@ -38,6 +38,7 @@ class RobotContext:
         name_prefix: str = "sdk-program",
         model: str = "asimov-v0",
         join_livekit: bool = True,
+        runtime_call_timeout_s: float | None = None,
     ) -> "RobotContext":
         client = AsyncClient(rcs_url=config.rcs_url, api_key=config.menlo_api_key)
         try:
@@ -63,6 +64,7 @@ class RobotContext:
             worker_names=[],
             rcw_identity_prefix="simplesim",
             join_livekit=join_livekit,
+            runtime_call_timeout_s=runtime_call_timeout_s,
         )
         room_key = await generate_room_key(client, robot_id)
         viewer_url = f"{config.viewer_base_url}/?key={room_key}"
@@ -118,14 +120,20 @@ async def open_robot_context(
     *,
     name_prefix: str = "sdk-program",
 ) -> RobotContext:
-    ctx = await RobotContext.create(config, name_prefix=name_prefix)
+    import os
+
+    runtime_call_timeout = os.environ.get("MENLO_RUNTIME_CALL_TIMEOUT_S")
+    ctx = await RobotContext.create(
+        config,
+        name_prefix=name_prefix,
+        runtime_call_timeout_s=float(runtime_call_timeout) if runtime_call_timeout else None,
+    )
     print(f"Created robot: {ctx.robot_id}")
     print("=" * 60)
     print(f"VIEWER URL: {ctx.viewer_url}")
     print("=" * 60)
     
     # Write URL early so playwright can join it
-    import os
     from pathlib import Path
     Path("run_logs").mkdir(parents=True, exist_ok=True)
     Path("run_logs/latest_level1_url.txt").write_text(str(ctx.viewer_url), encoding="ascii")

@@ -7,31 +7,61 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 from typing import Any
 
 
+TOKAMAK_URL = "https://api.tokamak.sh/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+DEFAULT_LLM_MODEL = "minimaxai/minimax-m3"
+DEFAULT_VLM_MODEL = "qwen/qwen3.6-35b-a3b"
+ALLOWED_AI_MODELS = (
+    "minimaxai/minimax-m3",
+    "qwen/qwen3.6-35b-a3b",
+)
+ALLOWED_LLM_MODELS = ALLOWED_AI_MODELS
+ALLOWED_VLM_MODELS = ALLOWED_AI_MODELS
+
+
+def get_llm_model(default: str = DEFAULT_LLM_MODEL) -> str:
+    """Return the configured text model for scripts and notebooks."""
+    model = os.environ.get("MENLO_LLM_MODEL", default).strip()
+    if model not in ALLOWED_AI_MODELS:
+        allowed = ", ".join(ALLOWED_AI_MODELS)
+        raise ValueError(f"MENLO_LLM_MODEL must be one of: {allowed}")
+    return model
+
+
+def get_vlm_model(default: str = DEFAULT_VLM_MODEL) -> str:
+    """Return the configured vision model for scripts and notebooks."""
+    model = os.environ.get("MENLO_VLM_MODEL", default).strip()
+    if model not in ALLOWED_AI_MODELS:
+        allowed = ", ".join(ALLOWED_AI_MODELS)
+        raise ValueError(f"MENLO_VLM_MODEL must be one of: {allowed}")
+    return model
 
 
 def call_llm(
     messages: list[dict[str, Any]],
     *,
     api_key: str,
-    model: str = "openrouter/free",
+    model: str | None = None,
     timeout_s: int = 120,
 ) -> str:
-    """Synchronous call to the LLM backend (OpenRouter in this case)."""
+    """Synchronous call to the configured chat-completions backend."""
     import requests
 
+    selected_model = model or get_llm_model()
+    backend_url = os.environ.get("MENLO_LLM_URL", TOKAMAK_URL)
     try:
         resp = requests.post(
-            OPENROUTER_URL,
+            backend_url,
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            json={"model": model, "messages": messages},
+            json={"model": selected_model, "messages": messages},
             timeout=timeout_s,
         )
         resp.raise_for_status()
@@ -47,9 +77,9 @@ def ask_vlm(
     prompt: str,
     *,
     api_key: str,
-    model: str = "openrouter/free",
+    model: str | None = None,
 ) -> str:
-    """Send an image + prompt to a VLM on OpenRouter."""
+    """Send an image + prompt to the configured VLM backend."""
     import base64
 
     b64_image = base64.b64encode(jpeg_bytes).decode("utf-8")
@@ -65,7 +95,7 @@ def ask_vlm(
             ],
         }
     ]
-    return call_llm(messages, api_key=api_key, model=model)
+    return call_llm(messages, api_key=api_key, model=model or get_vlm_model())
 
 
 def parse_tool_call(text: str) -> dict[str, Any] | None:

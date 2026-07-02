@@ -5,22 +5,31 @@
 Build and verify the Level 1 Menlo robot agent for maximum scored deliveries in
 the 10 minute benchmark.
 
+Before changing behavior, read `LEVEL1_HANDOFF_NOTES.md`. It captures the latest
+user requirements, live-test failures, and non-negotiable rules for avoiding
+A/conveyor misdeliveries.
+
 Level 1 rules:
 
 - Do not use `scene_state`.
-- Do not use exact cube or pad entity IDs.
+- Do not use exact cube or pad entity IDs for navigation or map answers.
 - Do not use entity-target `go_to`.
 - Coordinate `go_to` is allowed only for coordinates estimated from camera
   observations or coordinates recorded after the robot physically reached them.
 - Camera observations, `robot_status`, `set_head`, `set_velocity`,
   coordinate `go_to`, `pick_entity`, `place_entity`, memory, and progress helpers
   are allowed.
+- For `place_entity`, do not call the nearest-zone form `{}` during normal
+  delivery. Always use the matching explicit destination target
+  `pad_B/pad_C/pad_D/pad_E` after close pallet verification, so the cube cannot
+  be dropped on A/conveyor by accident.
 
 The scoring target is not "looks busy". The robot must pick a cube from the
 source conveyor area, identify the held color, move to the matching destination
-pad, place it, verify that the score increased, and repeat quickly. A
-`place_entity` SDK `done` result is not a scored delivery unless the delivered
-count increased.
+pad, place it, verify that the destination-pad delivered count increased, and
+repeat quickly. A `place_entity` SDK `done` result is not a scored delivery
+unless it used the matching explicit pad target and the delivered-count helper
+increased afterward.
 
 ## Working Rule
 
@@ -34,8 +43,9 @@ Work from evidence, one failure at a time:
 6. During live tests, watch both logs and Chrome.
 7. Save robot POV frames and Chrome screenshots when diagnosing behavior.
 8. Do not repeat live runs without naming the observed failure mode.
-9. Never count a delivery unless `place_entity` happened while holding a cube and
-   the delivered-count helper increased afterward.
+9. Never count a delivery unless `place_entity` happened while holding a cube,
+   targeted the matching explicit `pad_B/C/D/E`, and the destination-pad
+   delivered-count helper increased afterward.
 10. Keep unrelated dirty files untouched.
 
 ## Level 1 Architecture

@@ -17,17 +17,18 @@ class FakeClock:
 
 
 class FakeSceneContext:
+    def __init__(self, entities=None) -> None:
+        self.entities = entities or {
+            "cube_0": SimpleNamespace(visible=False, state={"parent_pad_id": "pad_C"}),
+            "cube_pool_0": SimpleNamespace(visible=False, state={"parent_pad_id": "pad_D"}),
+            "cube_1": SimpleNamespace(visible=True, state={"parent_pad_id": "pad_A"}),
+            "robot": SimpleNamespace(visible=True, state={}),
+        }
+
     async def state(self, name: str):
         if name != "scene_state":
             raise AssertionError(f"unexpected state read: {name}")
-        return SimpleNamespace(
-            entities={
-                "cube_0": SimpleNamespace(visible=False),
-                "cube_pool_0": SimpleNamespace(visible=False),
-                "cube_1": SimpleNamespace(visible=True),
-                "robot": SimpleNamespace(visible=True),
-            }
-        )
+        return SimpleNamespace(entities=self.entities)
 
 
 class CompletionConfigTest(unittest.TestCase):
@@ -91,6 +92,20 @@ class CompletionTrackerTest(unittest.TestCase):
         reason = asyncio.run(tracker.stop_reason_from_scene(FakeSceneContext()))
 
         self.assertEqual(reason, "delivered 2/2 cubes")
+
+    def test_stop_reason_from_scene_ignores_hidden_non_destination_cubes(self):
+        tracker = CompletionTracker(CompletionConfig(max_delivered_cubes=1))
+        ctx = FakeSceneContext(
+            {
+                "cube_0": SimpleNamespace(visible=False, state={"parent_pad_id": "pad_A"}),
+                "cube_pool_0": SimpleNamespace(visible=False, state={}),
+                "robot": SimpleNamespace(visible=True, state={}),
+            }
+        )
+
+        reason = asyncio.run(tracker.stop_reason_from_scene(ctx))
+
+        self.assertIsNone(reason)
 
 
 class ProgramLevelTest(unittest.TestCase):

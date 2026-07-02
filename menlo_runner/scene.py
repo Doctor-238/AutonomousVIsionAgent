@@ -78,11 +78,15 @@ async def held_cube_info(ctx: Any) -> tuple[str, str] | None:
 
 async def delivered_cube_ids(ctx: Any) -> list[str]:
     scene = await get_scene(ctx)
-    return [
-        eid
-        for eid, entity in scene.entities.items()
-        if eid.startswith("cube_")
-        and not entity.visible
-    ]
+    destination_pads = set(COLOR_TO_PAD.values())
+    delivered: list[str] = []
+    for eid, entity in scene.entities.items():
+        if not eid.startswith("cube_") or entity.visible:
+            continue
+        state = getattr(entity, "state", None) or {}
+        parent_pad_id = state.get("parent_pad_id") if hasattr(state, "get") else getattr(state, "parent_pad_id", None)
+        if parent_pad_id in destination_pads:
+            delivered.append(eid)
+    return delivered
 
 

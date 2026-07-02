@@ -5,16 +5,19 @@ from types import SimpleNamespace
 from menlo_runner.programs.project.ko.level_1_starter_ko import (
     AgentDecision,
     AgentMemory,
+    COLOR_TO_PAD_ENTITY,
     Observation,
     ScannedDetection,
     _add_no_place_zone,
     _bounded_step_xy,
     _choose_local_decision,
+    _dropzone_xy_from_landmark,
     _estimate_detection_distance,
     _fallback_status,
     _failure_mode,
     _is_unusable_pad_xy,
     _is_probable_held_or_floor_reflection,
+    _is_probable_source_lane_cube_as_pad,
     _is_probable_source_a_sign,
     _landmark_seek_candidates,
     _llm_backend_config,
@@ -23,13 +26,16 @@ from menlo_runner.programs.project.ko.level_1_starter_ko import (
     _looks_like_pad_candidate,
     _make_pallet_certificate,
     _navigation_block_reason,
+    _note_probable_source_a_sign,
     _observation_scan_plan,
     _pad_search_motion,
     _project_detection_xy,
     _remember_pad_estimates,
     _select_next_cube,
     _scored_delta,
+    _semantic_pad_approach_waypoint,
     _supervised_go_to_xy,
+    place_matching_pad,
     result_summary,
     update_memory,
 )
@@ -204,6 +210,20 @@ class Level1FastPolicyTest(unittest.TestCase):
 
         self.assertTrue(_looks_like_pad_candidate(blue_pallet))
 
+    def test_live_blue_d_close_wide_pallet_candidate_is_actionable(self):
+        close_d_pallet = detection(
+            "blue",
+            area=5303,
+            centroid=(1188, 229),
+            bbox=(1133, 200, 147, 69),
+            angle=25.7,
+            feature_ready=True,
+            letter_score=0.001,
+            wood_score=0.468,
+        )
+
+        self.assertTrue(_looks_like_pad_candidate(close_d_pallet))
+
     def test_top_clipped_blue_pallet_fragment_is_not_actionable(self):
         clipped = detection(
             "blue",
@@ -244,6 +264,23 @@ class Level1FastPolicyTest(unittest.TestCase):
         )
 
         self.assertTrue(_looks_like_pad_candidate(green_c))
+
+    def test_green_c_marker_coordinate_keeps_close_pallet_candidate(self):
+        memory = AgentMemory(known_source_xy=(0.4, -1.5), held_color="green")
+        green_c = detection(
+            "green",
+            area=5610,
+            centroid=(271, 313),
+            bbox=(233, 275, 78, 78),
+            feature_ready=True,
+            letter_score=0.086,
+            wood_score=0.151,
+        )
+
+        drop_xy = _dropzone_xy_from_landmark(memory, "green", (2.75, -1.61), green_c)
+
+        self.assertAlmostEqual(drop_xy[0], 2.75, delta=0.01)
+        self.assertAlmostEqual(drop_xy[1], -1.61, delta=0.01)
 
     def test_local_decision_projects_cube_coordinate(self):
         memory = AgentMemory()
@@ -497,7 +534,12 @@ class Level1FastPolicyTest(unittest.TestCase):
     def test_successful_place_confirms_pad_coordinate(self):
         memory = AgentMemory(target_pad_xy=(2.1, -2.4), stage="ready_place")
         verified = {
-            "action_result": {"action": "place_cube", "ok": True, "was_holding": True},
+            "action_result": {
+                "action": "place_cube",
+                "ok": True,
+                "was_holding": True,
+                "explicit_pad_target": "pad_C",
+            },
             "held_color": None,
             "delivered_count": 1,
         }
@@ -534,6 +576,27 @@ class Level1FastPolicyTest(unittest.TestCase):
         self.assertEqual(memory.rejected_pad_xy["blue"], [(1.2, -1.0)])
         self.assertTrue(any(zone["reason"] == "place_without_score" for zone in memory.no_place_zones))
 
+    def test_delivered_count_without_matching_explicit_pad_does_not_confirm(self):
+        memory = AgentMemory(target_pad_xy=(2.1, -2.4), stage="ready_place", delivered_count=0)
+        verified = {
+            "action_result": {
+                "action": "place_cube",
+                "ok": True,
+                "was_holding": True,
+                "explicit_pad_target": "pad_A",
+            },
+            "held_color": None,
+            "delivered_count": 1,
+        }
+
+        update_memory(memory, observation(), AgentDecision("place_cube", "green"), verified)
+
+        self.assertNotIn("green", memory.confirmed_pad_xy)
+        self.assertEqual(memory.rejected_pad_xy["green"], [(2.1, -2.4)])
+        self.assertTrue(
+            any(event["event"] == "score_without_explicit_matching_pad" for event in memory.semantic_map_events)
+        )
+
     def test_failed_blue_place_rejects_coordinate_without_blocking_remap(self):
         memory = AgentMemory(target_pad_xy=(2.1, -0.7), stage="ready_place", held_color="blue", delivered_count=0)
         verified = {
@@ -564,7 +627,12 @@ class Level1FastPolicyTest(unittest.TestCase):
             observation(),
             AgentDecision("place_cube", "green"),
             {
-                "action_result": {"action": "place_cube", "ok": True, "was_holding": True},
+                "action_result": {
+                    "action": "place_cube",
+                    "ok": True,
+                    "was_holding": True,
+                    "explicit_pad_target": "pad_C",
+                },
                 "held_color": None,
                 "delivered_count": 6,
             },
@@ -787,6 +855,52 @@ class Level1FastPolicyTest(unittest.TestCase):
 
         self.assertNotIn("green", memory.known_pad_xy)
 
+    def test_live_green_conveyor_cube_is_not_remembered_as_c_pad(self):
+        memory = AgentMemory(known_source_xy=(0.406, -1.497), held_color="green", stage="need_pad")
+        robot_status = status(x=0.406, y=-1.497, yaw_deg=0.0)
+        conveyor_cube = detection(
+            "green",
+            area=5615,
+            centroid=(271, 313),
+            bbox=(233, 275, 78, 78),
+            angle=-3.0,
+            feature_ready=True,
+            letter_score=0.086,
+            wood_score=0.151,
+        )
+        target_xy = (2.754, -1.607)
+        obs = Observation(robot_status=robot_status, detections=[conveyor_cube])
+
+        self.assertTrue(_is_probable_source_lane_cube_as_pad(memory, robot_status, conveyor_cube, target_xy))
+
+        _remember_pad_estimates(obs, memory)
+
+        self.assertNotIn("green", memory.known_pad_xy)
+        self.assertEqual(_landmark_seek_candidates(obs, memory, "green"), [])
+
+    def test_live_green_wide_source_corridor_candidate_is_not_c_pad(self):
+        memory = AgentMemory(known_source_xy=(0.406, -1.497), held_color="green", stage="need_pad")
+        robot_status = status(x=0.405, y=-1.487, yaw_deg=0.0)
+        source_side_blob = detection(
+            "green",
+            area=7095,
+            centroid=(158, 322),
+            bbox=(116, 280, 87, 87),
+            angle=-22.6,
+            feature_ready=True,
+            letter_score=0.088,
+            wood_score=0.152,
+        )
+        target_xy = (2.50, -2.04)
+        obs = Observation(robot_status=robot_status, detections=[source_side_blob])
+
+        self.assertTrue(_is_probable_source_lane_cube_as_pad(memory, robot_status, source_side_blob, target_xy))
+
+        _remember_pad_estimates(obs, memory)
+
+        self.assertNotIn("green", memory.known_pad_xy)
+        self.assertEqual(_landmark_seek_candidates(obs, memory, "green"), [])
+
     def test_live_held_cube_floor_reflection_is_not_place_evidence(self):
         memory = AgentMemory(target_pad_xy=(0.48, 0.43), held_color="green", stage="ready_place")
         robot_status = status(x=0.59, y=-0.27, yaw_deg=0.0)
@@ -843,6 +957,52 @@ class Level1FastPolicyTest(unittest.TestCase):
         reason = _navigation_block_reason(memory, (1.2, -1.05), purpose="pad", color="blue")
 
         self.assertEqual(reason, "no_place_zone")
+
+    def test_rejected_drop_coordinate_does_not_block_transit_waypoint(self):
+        memory = AgentMemory(rejected_pad_xy={"green": [(2.15, -2.41)]})
+
+        self.assertEqual(
+            _navigation_block_reason(memory, (2.13, -1.77), purpose="pad", color="green"),
+            "rejected_pad_xy",
+        )
+        self.assertIsNone(_navigation_block_reason(memory, (2.13, -1.77), purpose="waypoint", color="green"))
+
+    def test_green_c_uses_left_approach_hub_before_direct_pallet_route(self):
+        memory = AgentMemory(known_source_xy=(0.405, -1.497), held_color="green")
+        robot_xy = (1.09, -0.52)
+        target_xy = (1.875, 0.186)
+
+        hub_xy = _semantic_pad_approach_waypoint(memory, "green", robot_xy, target_xy, confirmed=False)
+
+        self.assertIsNotNone(hub_xy)
+        self.assertLess(hub_xy[0], robot_xy[0])
+        self.assertGreater(hub_xy[1], robot_xy[1])
+        self.assertLess(hub_xy[0], target_xy[0] - 0.8)
+
+    def test_green_c_left_hub_is_not_repeated_after_reaching_upper_side(self):
+        memory = AgentMemory(known_source_xy=(0.405, -1.497), held_color="green")
+        target_xy = (1.875, 0.186)
+
+        self.assertIsNone(
+            _semantic_pad_approach_waypoint(memory, "green", (0.20, 0.02), target_xy, confirmed=False)
+        )
+        self.assertIsNone(
+            _semantic_pad_approach_waypoint(memory, "green", (1.09, -0.52), target_xy, confirmed=True)
+        )
+
+    def test_far_a_sign_projection_does_not_block_green_c_route(self):
+        memory = AgentMemory(known_source_xy=(0.4, -1.5))
+        _note_probable_source_a_sign(memory, (2.67, -0.87), color="green")
+
+        self.assertEqual(memory.no_place_zones, [])
+        self.assertIsNone(_navigation_block_reason(memory, (2.75, -1.61), purpose="pad", color="green"))
+
+    def test_near_a_sign_projection_still_blocks_source_area_place(self):
+        memory = AgentMemory(known_source_xy=(0.4, -1.5))
+        _note_probable_source_a_sign(memory, (0.66, -1.32), color="green")
+
+        self.assertTrue(memory.no_place_zones)
+        self.assertEqual(_navigation_block_reason(memory, (0.66, -1.32), purpose="pad", color="green"), "no_place_zone")
 
     def test_near_pallet_certificate_requires_close_visual_evidence(self):
         memory = AgentMemory(target_pad_xy=(1.0, -1.0), held_color="blue", stage="ready_place")
@@ -915,6 +1075,35 @@ class Level1FastPolicyTest(unittest.TestCase):
         self.assertEqual(_failure_mode({"action": "navigate_to_pad", "ok": False, "error": "robot is fallen"}), "fallen")
 
 
+class FakePlaceContext:
+    def __init__(self):
+        self.calls = []
+
+    async def invoke(self, name, args=None, timeout_s=None):
+        self.calls.append((name, args, timeout_s))
+        return SimpleNamespace(status="done", error=None)
+
+
+class Level1PlaceTargetTest(unittest.IsolatedAsyncioTestCase):
+    async def test_place_matching_pad_uses_explicit_destination_not_nearest(self):
+        for color, pad_id in COLOR_TO_PAD_ENTITY.items():
+            ctx = FakePlaceContext()
+
+            result = await place_matching_pad(ctx, color)
+
+            self.assertEqual(result.status, "done")
+            self.assertEqual(ctx.calls[0][0], "place_entity")
+            self.assertEqual(ctx.calls[0][1], {"target": {"kind": "entity", "entity_id": pad_id}})
+
+    async def test_place_matching_pad_rejects_unknown_color(self):
+        ctx = FakePlaceContext()
+
+        with self.assertRaises(ValueError):
+            await place_matching_pad(ctx, None)
+
+        self.assertEqual(ctx.calls, [])
+
+
 class FakeNavigationContext:
     def __init__(self, robot_status, *, invoke_exc=None, invoke_status="done", invoke_error=None):
         self.robot_status = robot_status
@@ -922,8 +1111,10 @@ class FakeNavigationContext:
         self.invoke_status = invoke_status
         self.invoke_error = invoke_error
         self.cancel_called = False
+        self.last_timeout_s = None
 
     async def invoke(self, name, args=None, timeout_s=None):
+        self.last_timeout_s = timeout_s
         if name == "cancel":
             self.cancel_called = True
             return SimpleNamespace(status="done", error=None)
@@ -952,6 +1143,22 @@ class Level1NavigationSupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["corrected_by_position"])
         self.assertFalse(ctx.cancel_called)
+
+    async def test_supervised_go_to_forwards_custom_timeout(self):
+        memory = AgentMemory()
+        ctx = FakeNavigationContext(status(0.0, 0.0))
+
+        result = await _supervised_go_to_xy(
+            ctx,
+            memory,
+            (0.0, 0.0),
+            action="navigate_to_pad",
+            tolerance_m=0.5,
+            timeout_s=7.5,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(ctx.last_timeout_s, 7.5)
 
     async def test_supervised_go_to_cancels_timeout_when_robot_far(self):
         memory = AgentMemory()
@@ -986,6 +1193,41 @@ class Level1NavigationSupervisorTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result["ok"])
         self.assertFalse(result["corrected_by_position"])
+
+    async def test_pad_navigation_done_but_far_is_not_ready_to_place(self):
+        memory = AgentMemory()
+        ctx = FakeNavigationContext(status(2.6, -1.65), invoke_status="done")
+
+        result = await _supervised_go_to_xy(
+            ctx,
+            memory,
+            (4.25, -1.91),
+            action="navigate_to_pad",
+            tolerance_m=0.45,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["reached_by_position"])
+
+    async def test_pad_navigation_corrected_from_failed_status_cancels_residual_motion(self):
+        memory = AgentMemory()
+        ctx = FakeNavigationContext(
+            status(0.2, 0.2),
+            invoke_status="failed",
+            invoke_error="navigation stopped 0.325m from target, outside 0.300m completion radius",
+        )
+
+        result = await _supervised_go_to_xy(
+            ctx,
+            memory,
+            (0.0, 0.0),
+            action="navigate_to_pad",
+            tolerance_m=0.5,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["corrected_by_position"])
+        self.assertTrue(ctx.cancel_called)
 
 
 if __name__ == "__main__":
